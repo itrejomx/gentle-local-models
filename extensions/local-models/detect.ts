@@ -67,8 +67,13 @@ export async function probe(
       return { status: "unreachable", baseUrl, error: `HTTP ${response.status}` };
     }
 
-    const body = (await response.json()) as { data?: Array<{ id: string }> };
-    const models = Array.isArray(body?.data) ? body.data.map((model) => model.id) : [];
+    const body = (await response.json()) as { data?: Array<{ id?: unknown }> };
+    // R3-003: a semi-conformant /v1/models can return entries with no (or a
+    // non-string) `id`; filter those out rather than reporting a garbage id
+    // as a real model. An all-invalid list is treated as zero models below.
+    const models = Array.isArray(body?.data)
+      ? body.data.filter((model): model is { id: string } => typeof model?.id === "string").map((model) => model.id)
+      : [];
 
     if (models.length === 0) {
       return { status: "unreachable", baseUrl, error: "reachable but reported zero models" };

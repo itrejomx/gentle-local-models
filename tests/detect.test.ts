@@ -36,6 +36,37 @@ describe("probe", () => {
     );
   });
 
+  it("filters out model entries without a string id (semi-conformant /v1/models), keeping only valid ones (R3-003)", async () => {
+    const fetchFn: FetchLike = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: [{ id: "qwen3-4b" }, {}, { id: 42 }, { id: "glm-4.5-air" }] }),
+    })) as unknown as FetchLike;
+
+    const result = await probe(fetchFn, "http://localhost:11234/v1");
+
+    expect(result).toEqual({
+      status: "reachable",
+      baseUrl: "http://localhost:11234/v1",
+      models: ["qwen3-4b", "glm-4.5-air"],
+    });
+  });
+
+  it("treats a response where every model entry is invalid as zero models (R3-003)", async () => {
+    const fetchFn: FetchLike = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: [{}, { id: 42 }, { name: "no id field" }] }),
+    })) as unknown as FetchLike;
+
+    const result = await probe(fetchFn, "http://localhost:11234/v1");
+
+    expect(result.status).toBe("unreachable");
+    if (result.status === "unreachable") {
+      expect(result.error).toMatch(/zero models/i);
+    }
+  });
+
   it("treats a 200 response with zero models as a failure, not a success", async () => {
     const fetchFn: FetchLike = vi.fn(async () => ({
       ok: true,
