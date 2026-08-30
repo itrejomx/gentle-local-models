@@ -10,6 +10,7 @@ import type { FetchLike } from "../extensions/local-models/detect.ts";
 import type { WriterPorts } from "../extensions/local-models/models-writer.ts";
 import type { StatePorts } from "../extensions/local-models/state.ts";
 import type { VModelsFields, PropsFields, ContextPorts } from "../extensions/local-models/context.ts";
+import { realFetchProps, realFetchVModels } from "../extensions/local-models/ports.ts";
 
 function fakeCtx({ hasUI = true }: { hasUI?: boolean } = {}): AddContext & {
   select: ReturnType<typeof vi.fn>;
@@ -221,6 +222,27 @@ describe("add — context resolution guard (D-005)", () => {
     const written = JSON.parse(writer.files["/pi/agent/models.json"]);
     expect(written.providers["mlx-serve"].models[0].contextWindow).toBe(131072);
   });
+});
+
+describe("add — context metadata fetch is bounded and loader-wrapped (R4-005)", () => {
+  it("completes to the ask-at-registration prompt when the real ports' metadata fetch never resolves within its timeout", async () => {
+    const ctx = fakeCtx();
+    ctx.editor.mockResolvedValue("32768");
+    const neverResolving: FetchLike = vi.fn((_url: string, init?: RequestInit) => {
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
+      });
+    }) as unknown as FetchLike;
+    const ports = basePorts({
+      fetchVModels: realFetchVModels(neverResolving, 50),
+      fetchProps: realFetchProps(neverResolving, 50),
+    });
+
+    await add("localhost:11234", ctx, ports);
+
+    expect(ctx.editor).toHaveBeenCalledWith(expect.stringContaining("contextWindow"), "32768");
+    expect(ctx.ui.setWorkingMessage).toHaveBeenCalledWith(expect.stringContaining("Reading context metadata"));
+  }, 2000);
 });
 
 describe("add — context resolution, verificado source", () => {

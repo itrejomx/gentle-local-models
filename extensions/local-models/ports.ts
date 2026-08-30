@@ -21,6 +21,15 @@ export function stateJsonPath(): string {
   return join(homedir(), ".pi", "agent", "gentle-local-models.json");
 }
 
+/**
+ * R4-005: default timeout for the two D-005 context-metadata reads
+ * (`realFetchVModels`/`realFetchProps`). These are cold, best-effort reads —
+ * more lenient than detect.ts's probe() (1s, a reachability check) since
+ * failing slow here just means one context source doesn't resolve, but
+ * still bounded so a half-dead Server can never hang `add()` indefinitely.
+ */
+export const CONTEXT_FETCH_TIMEOUT_MS = 5000;
+
 function isEnoent(error: unknown): boolean {
   return (error as NodeJS.ErrnoException)?.code === "ENOENT";
 }
@@ -132,10 +141,15 @@ export function realContextPorts(
  * failure resolves to an empty map — this source simply doesn't resolve,
  * matching context.resolve's own no-throw contract.
  */
-export function realFetchVModels(fetchFn: FetchLike): (baseUrl: string) => Promise<Record<string, VModelsFields>> {
+export function realFetchVModels(
+  fetchFn: FetchLike,
+  timeoutMs: number = CONTEXT_FETCH_TIMEOUT_MS,
+): (baseUrl: string) => Promise<Record<string, VModelsFields>> {
   return async (baseUrl: string) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
-      const response = await fetchFn(`${baseUrl}/models`);
+      const response = await fetchFn(`${baseUrl}/models`, { signal: controller.signal });
       if (!response.ok) {
         return {};
       }
@@ -150,31 +164,48 @@ export function realFetchVModels(fetchFn: FetchLike): (baseUrl: string) => Promi
           typeof meta === "object" && meta !== null && typeof (meta as Record<string, unknown>).context_length === "number"
             ? ((meta as Record<string, unknown>).context_length as number)
             : undefined;
+        const capabilities = Array.isArray(entry.capabilities)
+          ? entry.capabilities.filter((c): c is string => typeof c === "string")
+          : undefined;
         out[entry.id] = {
           max_model_len: typeof entry.max_model_len === "number" ? entry.max_model_len : undefined,
           context_length: typeof entry.context_length === "number" ? entry.context_length : undefined,
           meta: metaContextLength !== undefined ? { context_length: metaContextLength } : undefined,
+          capabilities,
         };
       }
       return out;
     } catch {
       return {};
+    } finally {
+      clearTimeout(timer);
     }
   };
 }
 
-/** Real fetchProps: GETs `{origin}/props` (llama.cpp-family servers expose this unversioned, not under /v1). */
-export function realFetchProps(fetchFn: FetchLike): (baseUrl: string) => Promise<PropsFields | undefined> {
+/**
+ * Real fetchProps: GETs `{origin}/props` (llama.cpp-family servers expose
+ * this unversioned, not under /v1). R4-005: bounded by the same
+ * `CONTEXT_FETCH_TIMEOUT_MS` default as `realFetchVModels`.
+ */
+export function realFetchProps(
+  fetchFn: FetchLike,
+  timeoutMs: number = CONTEXT_FETCH_TIMEOUT_MS,
+): (baseUrl: string) => Promise<PropsFields | undefined> {
   return async (baseUrl: string) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const origin = new URL(baseUrl).origin;
-      const response = await fetchFn(`${origin}/props`);
+      const response = await fetchFn(`${origin}/props`, { signal: controller.signal });
       if (!response.ok) {
         return undefined;
       }
       return (await response.json()) as PropsFields;
     } catch {
       return undefined;
+    } finally {
+      clearTimeout(timer);
     }
   };
 }

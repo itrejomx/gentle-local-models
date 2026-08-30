@@ -156,8 +156,15 @@ export async function add(input: string, ctx: AddContext, ports: AddPorts): Prom
   }
   const needsContext = probeResult.models.some((modelId) => existingModelIn(existingRaw, providerKey, modelId)?.contextWindow === undefined);
 
-  const vModels = needsContext ? await ports.fetchVModels(baseUrl) : {};
-  const props = needsContext ? await ports.fetchProps(baseUrl) : undefined;
+  // R4-005: both cold metadata reads are bounded (see ports.ts's
+  // CONTEXT_FETCH_TIMEOUT_MS) and wrapped in the same loader so a slow
+  // Server shows working feedback instead of an apparently-frozen prompt.
+  const { vModels, props } = needsContext
+    ? await withLoader(ctx.ui, `Reading context metadata from ${baseUrl}…`, async () => ({
+        vModels: await ports.fetchVModels(baseUrl),
+        props: await ports.fetchProps(baseUrl),
+      }))
+    : { vModels: {} as Record<string, VModelsFields>, props: undefined as PropsFields | undefined };
 
   const models: ModelInput[] = [];
   const labels: Record<string, ModelLabel> = {};

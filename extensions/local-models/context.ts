@@ -9,6 +9,12 @@ export interface VModelsFields {
   max_model_len?: number;
   context_length?: number;
   meta?: { context_length?: number };
+  // Server-declared capabilities (e.g. mlx-serve's /v1/models "capabilities"
+  // array including "reasoning"). R4 (contextWindow resolution) never reads
+  // this field — it rides along here purely so the shell's R3-015 reasoning
+  // confirm flow can tell a Server-verified capability apart from its own
+  // family-name heuristic, without a second fetch.
+  capabilities?: string[];
 }
 
 export interface PropsFields {
