@@ -90,3 +90,63 @@ All fixed rows verified against the fix diff (45a7f78..342f877); 89/89 green, ts
 ## PR7 ui wrappers (`pr6-writer...pr7-ui`) — R3 reliability, 2026-08-30
 
 Sweep: 1 (standard tier, ~267 lines). 102/102 green, tsc clean, no test.only. withLoader finally-restore + rethrow verified; promptWithPrefill matches D5 (hasUI guard, cancel passthrough, no coercion); all five wrappers' signatures cross-checked against Pi's real ExtensionUIContext (types.d.ts:68-192) — all match. **Empty ledger: no findings survived the sweep.**
+
+## PR8 index.ts `add` wiring (`pr7-ui...pr8-add`) — Full 4R sweep, 2026-08-30
+
+Sweep: full 4R (index.ts is the shell that touches `ctx` and orchestrates the
+one module allowed to mutate `~/.pi/agent/models.json`, and this batch also
+introduces user-facing prompts/state persistence around it — a hot-path
+risk profile matching PR6's precedent). 4 lenses (review-risk,
+review-resilience, review-readability, review-reliability) ran one sweep
+each against the pre-fix diff; `npx vitest run` was 132/132 green pre-fix.
+3 refuters (correctness, exploitability/impact, reproducibility) evaluated
+the complete merged candidate list; unanimous STANDS (3/3) on all 6
+BLOCKER/CRITICAL candidates. This round (fix round 1) resolves all 6 in
+code/tests.
+
+| id | lens | location | severity | status | evidence |
+|---|---|---|---|---|---|
+| R4-005 | resilience | `extensions/local-models/ports.ts` `realFetchVModels`/`realFetchProps` (pre-fix) | BLOCKER | fixed | Both D-005 context-metadata reads had no timeout, so a half-dead Server could hang `add()` indefinitely on a bare `await`, with no working-indicator feedback either. 3/3 refuters STANDS. Fixed by adding an `AbortController` timeout (`CONTEXT_FETCH_TIMEOUT_MS`, 5s default — named/documented, more lenient than `detect.ts probe()`'s 1s reachability check but still bounded) matching `probe()`'s own pattern, and wrapping both awaits in one `withLoader(ctx.ui, "Reading context metadata from {baseUrl}…", ...)` call in `index.ts`. RED: a never-resolving fetch stub (real timers, overridden low `timeoutMs`) proved both `tests/ports.test.ts`'s direct port tests and `tests/index.add.test.ts`'s `add()`-level integration test genuinely timed out pre-fix. |
+| R3-015 | reliability | `extensions/local-models/index.ts` `add` (pre-fix, reasoning/thinkingFormat block) | CRITICAL | fixed | `reasoning: heuristic !== undefined ? true : undefined` set `reasoning: true` unconditionally for any family-matched model — the user only ever got to override the *format*, never to decline reasoning itself. 3/3 refuters STANDS. Fixed with a three-way split: (a) a Server-declared capability (mlx-serve's `/v1/models` "capabilities" including "reasoning", now a `VModelsFields.capabilities?: string[]` field) is verified, not proposed, and skips the confirm; (b) a family-matched but undeclared model gets ONE `toggleSetting` confirm ("Model {id} looks like a {family} reasoning model. Mark reasoning + thinkingFormat {fmt}?", using presets.ts's new `matchedFamily()` to show the family distinctly from its mapped format, e.g. glm→zai) that sets BOTH `reasoning` and `compat.thinkingFormat` on accept and NEITHER on decline; (c) an unmatched model still proposes nothing. Non-interactive runs propose nothing, omit both, and warn once naming every affected model. RED: 2 of 4 new `tests/index.add.test.ts` cases (decline, `!hasUI`) genuinely failed pre-fix (accept and declared-capability cases happened to pass by coincidence against the old always-true code, confirmed by inspection). |
+| R3-016 | reliability | `extensions/local-models/index.ts` `add` (pre-fix, ask-at-registration prompt) | CRITICAL | fixed | The prompt answer was only checked for `!== undefined`; an empty string, non-numeric text, or `"0"`/negative all still took the `declarado` branch, writing `contextWindow: 0` or `NaN` silently instead of falling back to the placeholder path. 3/3 refuters STANDS. Fixed by trimming the answer and validating `Number.isFinite(parsed) && parsed > 0`; any rejection (empty/non-numeric/NaN/zero/negative) now takes the exact same placeholder path as cancel, plus a notify naming the rejected input. RED: reverted just this snippet to prove `""` → `contextWindow: 0` and `"0"` → accepted-as-declared, both genuine pre-fix failures against the new tests. |
+| R2-006 | readability | `extensions/local-models/index.ts` `renderOutcome` (pre-fix, `write-failed` branch) | CRITICAL | fixed | The generic `write-failed` sentence named only the `fileState` enum value (`"unverified-write"`), giving no actionable recovery path for the one case where a bad write may already be sitting on disk (restore itself threw while recovering) — markedly less actionable than the sibling `restore-failed` message. 3/3 refuters STANDS. Fixed with a `stage:"restore"`/`fileState:"unverified-write"`-specific branch naming `models.json`'s path, the newest backup path when available, and instructing manual inspection/restore explicitly. RED: an assertion requiring the literal phrase "`{path} may be corrupted`" (not just an accidental substring match against the backup filename) failed against the old generic message. |
+| R4-006 | resilience | `extensions/local-models/index.ts` `add` (pre-fix, loadState/saveState block) | CRITICAL | fixed | The plugin's own `loadState`/`saveState` calls ran unguarded after a successful `models.json` write; a rejecting/throwing `StatePorts` implementation escaped `add()` as an unhandled rejection, silently losing the "Registered" message's promised context labels/ownership with no error surfaced at all. 3/3 refuters STANDS — impact lens noted this could be scored WARNING in isolation (models.json itself is already correctly written and is the real source of truth), but the orchestrator kept it CRITICAL because the failure mode is a **lying success**: the user sees "Registered" with no indication that bookkeeping silently failed. Location corrected during triage: the ledger's original citation (index.ts:282-292) predates this batch's edits; the actual block is index.ts:242-254 (pre-fix line numbers, before R3-015/R3-016 shifted the file). Fixed by wrapping the block in try/catch and notifying an explicit warning ("Registered in models.json, but plugin bookkeeping failed ({err}): context labels and ownership were not saved. Fix the cause and re-run add.") immediately after the existing success notify — both messages are observed, in order. RED: a rejecting `writeState` produced a genuine unhandled promise rejection pre-fix. |
+| R3-017 | test-only | `tests/index.add.test.ts` (re-add / merge coverage gap) | CRITICAL→test-only | fixed (test-only) | No test exercised the `existingIdx >= 0` merge branch (re-registering an already-known Server), so a regression dropping or relabeling prior `ModelLabel` entries on re-add would have gone undetected. 3/3 refuters STANDS on the coverage-gap finding; per the R3-013/G precedent (PR6), inspection confirmed the production merge logic (`{...(existingIdx >= 0 ? state.servers[existingIdx].models : {}), ...labels}`) was already correct — no code change was needed. Fixed by calling `add()` twice against the same Server, feeding the first run's persisted state back in via `fakeStatePorts`'s `initial` param, and asserting the first run's `ModelLabel` survives untouched and the server record is updated in place (not duplicated). |
+
+Adversarial verification: 3 refuters (correctness, exploitability/impact,
+reproducibility) evaluated the complete merged candidate list (R4-005,
+R3-015, R3-016, R2-006, R4-006, R3-017 — 6 candidates) independently;
+unanimous STANDS (3/3) on all 6. No refutations.
+
+Verification after fix round 1: `npx vitest run` 149/149 green (132
+pre-fix baseline + 17 new: 2 `tests/ports.test.ts` timeout cases, 1 `add()`
+timeout integration case, 3 `matchedFamily` cases, 4 R3-015 reasoning-
+confirm cases, 4 R3-016 context-answer-validation cases, 1 R2-006
+write-failed-humanization case, 1 R4-006 state-persistence-guard case, 1
+R3-017 re-add-merge case); `npx tsc --noEmit` exits 0. Diff vs. the
+pre-fix tip (`0c21bf8`): 8 files changed, 469 insertions(+), 37
+deletions(-).
+
+Info rows (not fixed, documented instead):
+
+| id | lens | location | severity | status | evidence |
+|---|---|---|---|---|---|
+| R2-005 | readability | `extensions/local-models/index.ts` `add` (`servingMode` heuristic) | WARNING | info | `servingMode` is derived per-probe as `probeResult.models.length > 1 ? "on-demand" : "single-model"` — a length-based heuristic, not a per-kind contract, persisted into `gentle-local-models.json` as if it were fact. This is apply-progress's already-documented assumption 2 (batch 8); the surgical round did not touch this code path, so no comment was added per the "only if a fix above already touches that area" instruction. Document as a known heuristic in Phase 9's docs pass. |
+| R3-018 | reliability | `extensions/local-models/index.ts` `add` (`servingMode` heuristic, same code as R2-005) | WARNING | info | Same underlying heuristic flagged from the reliability lens: an observed-model-count proxy for a Server's actual serving architecture can misclassify a multi-model-capable Server that happens to report one model at probe time. Left untouched for the same reason as R2-005 — not touched by any of this round's 6 fixes. Document in Phase 9. |
+
+**R1 (risk lens) empty ledger**: no BLOCKER/CRITICAL/WARNING findings from
+the risk lens this sweep — the risk-relevant surface (state persistence
+honesty, reasoning/thinkingFormat consent, recovery messaging) is fully
+covered by R4-006/R3-015/R2-006 above from the resilience/reliability/
+readability lenses instead.
+
+**Phase 9 note (llama-swap config path)**: `realContextPorts()`'s default
+`readLlamaSwapConfig` path is `~/.llama-swap/config.yaml`, overridable via
+`LLAMA_SWAP_CONFIG_PATH` (`extensions/local-models/ports.ts`). This is a
+v0.1 placeholder convention (no live discovery of a running llama-swap
+instance's own config path — that's R5/v0.2 territory per spec's scope
+header), not llama-swap's own default install location. A real user's
+config commonly lives elsewhere (e.g. wherever they pass `--config` on
+their own launch command); Phase 9's docs (`extensions/local-models/
+README.md`, `tests/MANUAL-E2E.md`) MUST call this out explicitly so users
+don't assume the plugin auto-discovers their actual file.
