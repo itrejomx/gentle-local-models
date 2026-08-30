@@ -65,8 +65,8 @@ Greenfield package + 5 pure core modules + shell + UI wrappers, each with paired
 - [x] 5.4 GREEN integration: `commit()` — read→guard→merge→validate→backup→write→verifyWritten→restore.
 
 ## Phase 6: ui/*.ts wrappers
-- [ ] 6.1 RED `tests/ui.test.ts`: SelectList/SettingsList/BorderedLoader pass through to mocked `ctx.ui` unchanged.
-- [ ] 6.2 GREEN `ui/*.ts`: thin wrappers, no business logic.
+- [x] 6.1 RED `tests/ui.test.ts`: SelectList/SettingsList/BorderedLoader pass through to mocked `ctx.ui` unchanged.
+- [x] 6.2 GREEN `ui/*.ts`: thin wrappers, no business logic.
 
 ## Phase 7: index.ts — add (D-003, D-005, D-006, D-007)
 - [ ] 7.1 RED `tests/index.add.test.ts`: normalize→probe→kind select (warn omlx/mtplx-rewritten key)→presets.provider; `context.resolve` called ONLY for models missing `contextWindow` (D-005, preserved value never relabeled); `unresolved`+interactive→`ctx.ui.editor(title,"32768")` accepted→`declarado` (D-006); editor cancel(undefined)→omit+`placeholder`+warn (D-007), same path as non-interactive; thinking proposal w/ override; commit()+state.save().
