@@ -1,0 +1,65 @@
+# openspec/config.yaml
+schema: spec-driven
+
+context: |
+  Product: gentle-local-models — TypeScript Pi coding-agent extension (npm package,
+  `pi install npm:gentle-local-models`). Registers local OpenAI-compatible model
+  servers (mtplx, oMLX, mlx-serve, llama-swap) as Pi providers in
+  ~/.pi/agent/models.json and validates gentle-pi's per-agent routing in
+  ~/.pi/gentle-ai/models.json. ADR-0001: register and validate, never assign —
+  model-to-agent assignment stays gentle-pi's job (/gentle:models).
+  Dev loop: .pi/extensions/ + /reload. UI via pi-tui (SelectList, SettingsList,
+  BorderedLoader). Docs-only repo today (PRD, CONTEXT.md glossary, WAYFINDER.md,
+  ADR-0001, drafts/); no source code yet; not a git repository yet.
+
+strict_tdd: true
+
+testing:
+  runner: vitest
+  status: not-yet-installed
+  test_command: "npx vitest run"
+  note: >-
+    No test runner exists yet. vitest is the recommended runner for this
+    TypeScript/Node project. Because strict TDD is enabled, the first apply
+    batch MUST install and wire up vitest before any implementation code is
+    written.
+
+rules:
+  proposal:
+    - Reference PRD requirement IDs (R1-R8) from 01-plugin-modelos-locales-pi.md
+    - Respect the ADR-0001 boundary: the plugin never writes gentle-pi's files
+      (~/.pi/gentle-ai/models.json, models.export.json, subagents.json)
+    - Include rollback plan for risky changes (esp. models.json writer changes)
+  specs:
+    - Use Given/When/Then for scenarios
+    - Use RFC 2119 keywords (MUST, SHALL, SHOULD, MAY)
+    - Use CONTEXT.md capitalized terms exactly: Server, Provider, Routable Agent,
+      Routing, Check, Unserved Model, Serving Mode
+  design:
+    - Follow the module layout from PRD §7: index.ts, detect.ts, presets.ts,
+      models-writer.ts, state.ts, context.ts, routing-reader.ts, check.ts,
+      probes.ts, ui/
+    - Document architecture decisions with rationale; note any deviation from
+      ADR-0001 explicitly
+  tasks:
+    - Group by phase, use hierarchical numbering
+    - Keep tasks completable in one session
+    - First apply batch MUST set up the vitest test runner before any
+      implementation code (strict TDD, no runner installed yet)
+  apply:
+    guidelines:
+      - Follow existing code patterns
+      - Never write to ~/.pi/gentle-ai/models.json, models.export.json, or
+        subagents.json (read-only per ADR-0001)
+      - Always back up ~/.pi/agent/models.json before writing; refuse to write
+        if the file contains comments
+    tdd: true
+    test_command: "npx vitest run"
+  verify:
+    test_command: "npx vitest run"
+    build_command: ""
+    coverage_threshold: 0
+  archive:
+    - Warn before merging destructive deltas
+    - Extra scrutiny on any delta touching the writer merge policy or the
+      ADR-0001 register/validate boundary
