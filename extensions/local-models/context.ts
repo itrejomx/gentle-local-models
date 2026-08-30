@@ -94,6 +94,10 @@ function parseLlamaSwapCtxSize(configText: string, modelId: string): number | un
       break;
     }
 
+    if (line.trim().startsWith("#")) {
+      continue;
+    }
+
     const ctxSizeMatch = line.match(/--ctx-size[=\s]+(\d+)/);
     if (ctxSizeMatch) {
       return Number(ctxSizeMatch[1]);

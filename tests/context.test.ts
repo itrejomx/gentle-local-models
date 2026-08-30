@@ -84,6 +84,39 @@ describe("resolve — source priority chain (R4)", () => {
     });
   });
 
+  it("ignores a decoy --ctx-size inside a mapping-level comment and resolves the real value", async () => {
+    const configText = [
+      "models:",
+      '  "qwen3-4b":',
+      "    # old: --ctx-size 4096, bumped after re-measuring",
+      "    cmd: llama-server --model /models/qwen3.gguf --ctx-size 8192",
+    ].join("\n");
+    const ports: ContextPorts = { readLlamaSwapConfig: async () => configText };
+
+    const result = await resolve("qwen3-4b", {}, ports);
+
+    expect(result).toEqual({
+      kind: "resolved",
+      value: 8192,
+      label: "verificado",
+      source: "llama-swap-config",
+    });
+  });
+
+  it("returns unresolved when the only --ctx-size-looking text in the block is inside a comment", async () => {
+    const configText = [
+      "models:",
+      '  "qwen3-4b":',
+      "    # --ctx-size 4096",
+      "    cmd: llama-server --model /models/qwen3.gguf",
+    ].join("\n");
+    const ports: ContextPorts = { readLlamaSwapConfig: async () => configText };
+
+    const result = await resolve("qwen3-4b", {}, ports);
+
+    expect(result).toEqual({ kind: "unresolved" });
+  });
+
   it("extracts the ctx-size for the correct model id when the config has multiple models", async () => {
     const configText = [
       "models:",
