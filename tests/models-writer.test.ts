@@ -449,4 +449,71 @@ describe("commit — full orchestration against stubbed WriterPorts (R2)", () =>
       "m2",
     ]);
   });
+
+  it("never throws when the main write rejects — resolves to an outcome, attempting a restore", async () => {
+    const original = JSON.stringify({ providers: { lmstudio: { models: [{ id: "m1", name: "m1" }] } } });
+    const files: Record<string, string> = { [path]: original };
+    let mainWriteAttempts = 0;
+    const ports: WriterPorts & { files: Record<string, string> } = {
+      files,
+      async readFile(p: string) {
+        return files[p];
+      },
+      async writeFile(p: string, contents: string) {
+        // Only the main write to `path` fails ("disk full"); the backup
+        // write and the later restore write-back both succeed normally.
+        if (p === path) {
+          mainWriteAttempts++;
+          if (mainWriteAttempts === 1) {
+            throw new Error("disk full");
+          }
+        }
+        files[p] = contents;
+      },
+      async deleteFile(p: string) {
+        delete files[p];
+      },
+      async listBackups(p: string) {
+        const prefix = `${p}.`;
+        return Object.keys(files).filter((k) => k.startsWith(prefix) && k.endsWith(".bak"));
+      },
+      now: () => 7,
+      verifyWritten: async () => ({ ok: true }),
+    };
+
+    const outcome = await commit(ports, path, "lmstudio", { models: [{ id: "m2" }] });
+
+    // No throw escaped commit() — a real outcome value came back, and the
+    // pre-image backup taken before the failed write let us restore it.
+    expect(outcome).toEqual({
+      kind: "restored",
+      path: `${path}.7.bak`,
+      error: "main write failed: disk full",
+      verification: { ok: true },
+    });
+    expect(ports.files[path]).toBe(original);
+  });
+
+  it("never throws when verifyWritten itself throws — resolves to an outcome, attempting a restore", async () => {
+    const original = JSON.stringify({ providers: { lmstudio: { models: [{ id: "m1", name: "m1" }] } } });
+    let calls = 0;
+    const verify: WriterPorts["verifyWritten"] = async () => {
+      calls++;
+      if (calls === 1) {
+        throw new Error("registry refresh crashed");
+      }
+      return { ok: true };
+    };
+    const ports = memoryPorts({ [path]: original }, { now: 9, verify });
+
+    const outcome = await commit(ports, path, "lmstudio", { models: [{ id: "m2" }] });
+
+    expect(outcome).toEqual({
+      kind: "restored",
+      path: `${path}.9.bak`,
+      error: "verifyWritten threw: registry refresh crashed",
+      verification: { ok: true },
+    });
+    expect(ports.files[path]).toBe(original);
+  });
 });

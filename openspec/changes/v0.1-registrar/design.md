@@ -150,7 +150,9 @@ type WriteOutcome =
   | { kind: "restored"; path: string; error: string;       // a backup was restored; `verification`
       verification: { ok: true } | { ok: false; error: string } } // is a SECOND verifyWritten (D3)
   | { kind: "rolled-back"; error: string }                 // no backup existed; rolled back to "no file"
-  | { kind: "restore-failed"; path: string; reason: string; error: string }; // restore itself failed; failed write left in place
+  | { kind: "restore-failed"; path: string; reason: string; error: string } // restore itself failed; failed write left in place
+  | { kind: "write-failed"; stage: "read" | "rotate-backups" | "restore";  // an injected port itself
+      error: string; fileState: "untouched" | "unverified-write"; backup?: string }; // rejected/threw (C)
 
 interface WriterPorts {           // injected — makes the writer unit-testable
   readFile(p: string): Promise<string | undefined>;

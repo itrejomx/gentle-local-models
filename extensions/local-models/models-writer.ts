@@ -5,6 +5,15 @@
 // with automatic restore. All I/O is injected via `WriterPorts` (D3) so this
 // module is fully unit-testable without touching the real filesystem.
 //
+// Every stage that calls a `WriterPorts` method (read, rotateBackups, the
+// main write, verifyWritten, restore) is wrapped so a rejecting/throwing
+// port can never escape `commit()` (C) — it always resolves to a
+// `WriteOutcome` value instead, naming the stage and the file state left
+// behind. `WriteOutcome`'s restore-related variants (`restored`,
+// `rolled-back`, `restore-failed`) report what actually happened rather than
+// a single ambiguous `restored` kind (B+F); a successful restore is
+// re-verified via a second `verifyWritten` call (D3) before being reported.
+//
 // The mirrored schema (D2) covers ONLY the fields this plugin itself writes
 // — `baseUrl`/`apiKey`/`compat` at the Provider level, `id`/`name`/
 // `contextWindow`/`maxTokens`/`reasoning`/`input`/`compat` at the Model level
@@ -84,7 +93,20 @@ export type WriteOutcome =
   // A backup existed but restoring from it failed (the backup itself is
   // unreadable, or writing it back failed). The failed write is left in
   // `path` untouched — reported honestly rather than silently discarded.
-  | { kind: "restore-failed"; path: string; reason: string; error: string };
+  | { kind: "restore-failed"; path: string; reason: string; error: string }
+  // An injected WriterPorts call itself rejected/threw in a stage that isn't
+  // already covered by a richer outcome above (C): reading the existing
+  // file, rotating backups, or — as a last resort — the restore machinery
+  // itself blowing up while already trying to recover from a bad write. No
+  // exception ever escapes `commit()`; `fileState` names what the caller can
+  // assume about `path`.
+  | {
+      kind: "write-failed";
+      stage: "read" | "rotate-backups" | "restore";
+      error: string;
+      fileState: "untouched" | "unverified-write";
+      backup?: string;
+    };
 
 function asObject(value: unknown): Json {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? { ...(value as Json) } : {};
@@ -388,8 +410,10 @@ async function restoreNewestBackup(ports: WriterPorts, path: string): Promise<Re
  * Full write orchestration (D-001/D3/D6): read → comment guard → merge
  * (fill-never-overwrite) → mirror validate → backup rotate → write →
  * verifyWritten → restore newest backup on failure. Every abort names the
- * file state it left behind; no thrown exception can leave models.json
- * half-written.
+ * file state it left behind. Every port-calling stage (read, rotateBackups,
+ * the main write, verifyWritten, restore) is wrapped (C): no exception from
+ * an injected `WriterPorts` can escape `commit()` — every rejection resolves
+ * to a `WriteOutcome` value instead.
  */
 export async function commit(
   ports: WriterPorts,
@@ -397,7 +421,12 @@ export async function commit(
   providerKey: string,
   input: ProviderInput,
 ): Promise<WriteOutcome> {
-  const raw = await ports.readFile(path);
+  let raw: string | undefined;
+  try {
+    raw = await ports.readFile(path);
+  } catch (error) {
+    return { kind: "write-failed", stage: "read", error: errorMessage(error), fileState: "untouched" };
+  }
 
   if (raw !== undefined && hasComments(raw)) {
     return { kind: "refused", reason: "comments" };
@@ -426,27 +455,54 @@ export async function commit(
 
   let backupPath: string | undefined;
   if (raw !== undefined) {
-    backupPath = await rotateBackups(ports, path, raw);
+    try {
+      backupPath = await rotateBackups(ports, path, raw);
+    } catch (error) {
+      return { kind: "write-failed", stage: "rotate-backups", error: errorMessage(error), fileState: "untouched" };
+    }
   }
 
-  await ports.writeFile(path, JSON.stringify(merged, null, 2));
-
   const modelIds = input.models.map((m) => m.id);
-  const verification = await ports.verifyWritten(providerKey, modelIds);
+
+  try {
+    await ports.writeFile(path, JSON.stringify(merged, null, 2));
+  } catch (error) {
+    // A rejecting main write can still leave `path` partially written by a
+    // non-atomic port (see WriterPorts.writeFile's atomicity contract, D) —
+    // attempt a restore rather than trust whatever is now on disk (C).
+    return recoverFromFailedWrite(
+      ports,
+      path,
+      providerKey,
+      modelIds,
+      `main write failed: ${errorMessage(error)}`,
+      backupPath,
+    );
+  }
+
+  let verification: { ok: true } | { ok: false; error: string };
+  try {
+    verification = await ports.verifyWritten(providerKey, modelIds);
+  } catch (error) {
+    verification = { ok: false, error: `verifyWritten threw: ${errorMessage(error)}` };
+  }
 
   if (!verification.ok) {
-    return recoverFromFailedWrite(ports, path, providerKey, modelIds, verification.error);
+    return recoverFromFailedWrite(ports, path, providerKey, modelIds, verification.error, backupPath);
   }
 
   return { kind: "written", backup: backupPath, lint: lintWarnings };
 }
 
 /**
- * Runs the recovery path after a write is known to be bad (`verifyWritten`
- * reported failure): restore the newest backup, then honestly report what
- * actually happened (B+F) — `restored` (with a second `verifyWritten` per
- * D3), `rolled-back` (no backup existed), or `restore-failed` (the failed
- * write is left in place).
+ * Runs the recovery path after a write is known to be bad (main write
+ * rejected, or `verifyWritten` reported/threw a failure): restore the
+ * newest backup, then honestly report what actually happened (B+F) —
+ * `restored` (with a second `verifyWritten` per D3), `rolled-back` (no
+ * backup existed), or `restore-failed` (the failed write is left in place).
+ * If the restore machinery itself throws (C), that becomes a `write-failed`
+ * outcome instead of escaping — the main write already landed in `path`,
+ * unconfirmed, and recovery could not even be attempted.
  */
 async function recoverFromFailedWrite(
   ports: WriterPorts,
@@ -454,8 +510,20 @@ async function recoverFromFailedWrite(
   providerKey: string,
   modelIds: string[],
   triggeringError: string,
+  backupPath: string | undefined,
 ): Promise<WriteOutcome> {
-  const restoreResult = await restoreNewestBackup(ports, path);
+  let restoreResult: RestoreResult;
+  try {
+    restoreResult = await restoreNewestBackup(ports, path);
+  } catch (error) {
+    return {
+      kind: "write-failed",
+      stage: "restore",
+      error: `${triggeringError}; restore threw: ${errorMessage(error)}`,
+      fileState: "unverified-write",
+      backup: backupPath,
+    };
+  }
 
   if (restoreResult.status === "rolled-back-no-backup") {
     return { kind: "rolled-back", error: triggeringError };
@@ -472,7 +540,13 @@ async function recoverFromFailedWrite(
 
   // Successful restore (D3): refresh again and report that second
   // verification's result too — a successful restore is not itself proof
-  // the restored content is good.
-  const verification = await ports.verifyWritten(providerKey, modelIds);
+  // the restored content is good. A throwing re-verify is itself caught so
+  // this final stage cannot leak an exception either.
+  let verification: { ok: true } | { ok: false; error: string };
+  try {
+    verification = await ports.verifyWritten(providerKey, modelIds);
+  } catch (error) {
+    verification = { ok: false, error: `verifyWritten threw: ${errorMessage(error)}` };
+  }
   return { kind: "restored", path: restoreResult.path, error: triggeringError, verification };
 }
