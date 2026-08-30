@@ -150,3 +150,12 @@ config commonly lives elsewhere (e.g. wherever they pass `--config` on
 their own launch command); Phase 9's docs (`extensions/local-models/
 README.md`, `tests/MANUAL-E2E.md`) MUST call this out explicitly so users
 don't assume the plugin auto-discovers their actual file.
+
+### PR8 fix-round scoped re-review (2026-08-30) — CONVERGED
+
+All six fixed rows verified against 0c21bf8..04b8a99; 149/149 green, tsc clean. Editor TS2554/TS2353 REFUTED with tsc --listFiles (4th stale-LSP artifact). Round 2 not required. New info rows:
+
+| id | lens | location | severity | status | evidence |
+|---|---|---|---|---|---|
+| R3-019 | reliability | index.ts declaredReasoning check | WARNING | info | A Server declaring capabilities WITHOUT "reasoning" falls through to the family confirm (capabilities is an additive positive signal, not exhaustive). Defensible; document if capabilities semantics are formalized. |
+| R3-020 | reliability | tests/index.add.test.ts:340-351 | WARNING | info | Test title claims negative-value coverage but only feeds "0"; logic correct by inspection (parsed > 0). Add "-5" case next time the file is touched. |
