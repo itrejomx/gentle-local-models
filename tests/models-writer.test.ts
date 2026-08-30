@@ -384,11 +384,19 @@ describe("commit — full orchestration against stubbed WriterPorts (R2)", () =>
     const ports = memoryPorts({});
 
     const outcome = await commit(ports, path, "lmstudio", {
-      compat: { supportsDeveloperRole: false, supportsReasoningEffort: false, maxTokensField: "max_tokens" },
-      models: [{ id: "m1", compat: { thinkingFormat: "qwen" } as ProviderInput["models"][number]["compat"] }],
+      // Deliberately misspelled Provider-level key (typo: missing trailing "e").
+      compat: { supportsDeveloperRol: false } as unknown as ProviderInput["compat"],
+      models: [
+        // Deliberately bogus Model-level key.
+        { id: "m1", compat: { bogusKey: "qwen" } as unknown as ProviderInput["models"][number]["compat"] },
+      ],
     });
 
     expect(outcome.kind).toBe("written");
+    if (outcome.kind === "written") {
+      expect(outcome.lint.some((w) => w.includes("supportsDeveloperRol"))).toBe(true);
+      expect(outcome.lint.some((w) => w.includes("bogusKey"))).toBe(true);
+    }
     expect(JSON.parse(ports.files[path]).providers.lmstudio.models[0].id).toBe("m1");
   });
 
