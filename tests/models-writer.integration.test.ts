@@ -4,11 +4,21 @@
 // any change, that a real round trip never overwrites an existing field, and
 // that a verifyWritten failure genuinely restores the newest on-disk backup
 // — never `~/.pi/agent/models.json`, never any gentle-ai file.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { mkdtemp, readdir, readFile, rm, unlink, writeFile } from "node:fs/promises";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, readdir, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import { commit, type WriterPorts } from "../extensions/local-models/models-writer.ts";
+
+// Wraps (not replaces) node:fs/promises.rename so the atomic-write test below
+// can observe real rename calls — ESM module namespaces aren't configurable,
+// so vi.spyOn can't touch a built-in directly; vi.mock's factory can.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, rename: vi.fn(actual.rename) };
+});
+
+let tmpFileCounter = 0;
 
 function realFsPorts(now: () => number, verify: WriterPorts["verifyWritten"]): WriterPorts {
   return {
@@ -22,8 +32,14 @@ function realFsPorts(now: () => number, verify: WriterPorts["verifyWritten"]): W
         throw error;
       }
     },
+    // Reference implementation of the atomicity contract documented on
+    // WriterPorts.writeFile (D4): write to a temp file in the same
+    // directory, then rename into place, so `path` is never observed with
+    // partial content and Phase 7's real shell port has this to copy.
     async writeFile(path: string, contents: string) {
-      await writeFile(path, contents, "utf-8");
+      const tmpPath = `${path}.tmp-${process.pid}-${tmpFileCounter++}`;
+      await writeFile(tmpPath, contents, "utf-8");
+      await rename(tmpPath, path);
     },
     async deleteFile(path: string) {
       await unlink(path);
@@ -121,5 +137,27 @@ describe("commit — real filesystem integration (D-001, D3)", () => {
 
     expect(outcome).toEqual({ kind: "rolled-back", error: "empty provider map" });
     await expect(readFile(modelsPath, "utf-8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("writes the main file atomically via a temp file + rename, never exposing a partial-content window (D4)", async () => {
+    const original = JSON.stringify({ providers: { lmstudio: { models: [{ id: "m1", name: "m1" }] } } });
+    await writeFile(modelsPath, original, "utf-8");
+    const ports = realFsPorts(() => 5000, alwaysOk);
+    const renameMock = vi.mocked(rename);
+    renameMock.mockClear();
+
+    const outcome = await commit(ports, modelsPath, "lmstudio", { models: [{ id: "m2" }] });
+
+    expect(outcome.kind).toBe("written");
+    const mainWriteRename = renameMock.mock.calls.find(([, dest]) => dest === modelsPath);
+    expect(mainWriteRename).toBeDefined();
+    expect(mainWriteRename?.[0]).not.toBe(modelsPath); // renamed FROM a distinct temp path
+
+    const finalContents = JSON.parse(await readFile(modelsPath, "utf-8"));
+    expect(finalContents.providers.lmstudio.models.map((m: { id: string }) => m.id)).toEqual(["m1", "m2"]);
+
+    // No leftover temp files once the atomic write completes.
+    const entries = await readdir(dir);
+    expect(entries.some((e) => e.includes(".tmp-"))).toBe(false);
   });
 });

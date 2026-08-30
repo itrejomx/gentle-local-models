@@ -64,6 +64,16 @@ export interface ProviderInput {
 
 export interface WriterPorts {
   readFile(path: string): Promise<string | undefined>;
+  /**
+   * Writes `contents` to `path`. Implementations MUST be atomic — write to a
+   * temporary file in the same directory, then rename it into place (a
+   * same-filesystem rename is atomic on POSIX). This guarantees there is
+   * never a window where a reader can observe `path` holding partial
+   * content, and that a process crash mid-write leaves any pre-existing
+   * file at `path` untouched (D4). See `tests/models-writer.integration.test.ts`'s
+   * `realFsPorts` for the reference implementation Phase 7's real shell port
+   * must copy.
+   */
   writeFile(path: string, contents: string): Promise<void>;
   deleteFile(path: string): Promise<void>;
   listBackups(path: string): Promise<string[]>;
@@ -74,7 +84,10 @@ export interface WriterPorts {
 export type WriteOutcome =
   | { kind: "written"; backup?: string; lint: string[] }
   | { kind: "refused"; reason: "comments" }
-  | { kind: "invalid"; errors: string[] }
+  // File untouched. `backups` (D4c) lists whatever backups are available for
+  // this path so the shell can offer manual recovery when the EXISTING file
+  // turns out to be corrupted (invalid JSON or schema-invalid).
+  | { kind: "invalid"; errors: string[]; backups: string[] }
   // A prior backup existed and was restored. `verification` is the result of
   // re-running `verifyWritten` against the restored content (D3: restore →
   // refresh again → report) — restoring is not itself proof the restored
@@ -406,6 +419,16 @@ async function restoreNewestBackup(ports: WriterPorts, path: string): Promise<Re
   return { status: "restored", path: newest };
 }
 
+async function listBackupsSafely(ports: WriterPorts, path: string): Promise<string[]> {
+  try {
+    return await ports.listBackups(path);
+  } catch {
+    // Best-effort recovery hint (D4c) — an inability to list backups must
+    // not turn an already-computed `invalid` outcome into a throw.
+    return [];
+  }
+}
+
 /**
  * Full write orchestration (D-001/D3/D6): read → comment guard → merge
  * (fill-never-overwrite) → mirror validate → backup rotate → write →
@@ -440,6 +463,9 @@ export async function commit(
       return {
         kind: "invalid",
         errors: [`existing models.json is not valid JSON: ${errorMessage(error)}`],
+        // Recovery hint (D4c): a corrupted EXISTING file is exactly the case
+        // where the shell should be able to offer "restore from a backup".
+        backups: await listBackupsSafely(ports, path),
       };
     }
   }
@@ -448,7 +474,7 @@ export async function commit(
 
   const validation = validate(merged);
   if (!validation.ok) {
-    return { kind: "invalid", errors: validation.errors };
+    return { kind: "invalid", errors: validation.errors, backups: await listBackupsSafely(ports, path) };
   }
 
   const lintWarnings = lint(merged);

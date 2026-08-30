@@ -146,7 +146,7 @@ interface PluginState {           // ~/.pi/agent/gentle-local-models.json
 type WriteOutcome =
   | { kind: "written";  backup?: string; lint: string[] }
   | { kind: "refused";  reason: "comments" }
-  | { kind: "invalid";  errors: string[] }                 // file untouched
+  | { kind: "invalid";  errors: string[]; backups: string[] } // file untouched; backups offered for recovery (D4c)
   | { kind: "restored"; path: string; error: string;       // a backup was restored; `verification`
       verification: { ok: true } | { ok: false; error: string } } // is a SECOND verifyWritten (D3)
   | { kind: "rolled-back"; error: string }                 // no backup existed; rolled back to "no file"
@@ -156,8 +156,9 @@ type WriteOutcome =
 
 interface WriterPorts {           // injected — makes the writer unit-testable
   readFile(p: string): Promise<string | undefined>;
-  writeFile(p: string, s: string): Promise<void>;
-  listBackups(): Promise<string[]>;
+  writeFile(p: string, s: string): Promise<void>;   // MUST be atomic: write-temp + rename (D4)
+  deleteFile(p: string): Promise<void>;
+  listBackups(p: string): Promise<string[]>;
   now(): number;
   verifyWritten(providerKey: string, modelIds: string[]): Promise<{ ok: true } | { ok: false; error: string }>;
 }

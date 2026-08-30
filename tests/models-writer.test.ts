@@ -349,8 +349,35 @@ describe("commit — full orchestration against stubbed WriterPorts (R2)", () =>
 
     const outcome = await commit(ports, path, "lmstudio", { models: [{ id: "m2" }] });
 
-    expect(outcome.kind).toBe("invalid");
+    expect(outcome).toMatchObject({ kind: "invalid", backups: [] });
     expect(ports.files[path]).toBe(corrupted);
+  });
+
+  it("surfaces available backup paths on an invalid outcome for a corrupted existing file, so the shell can offer recovery", async () => {
+    const corrupted = JSON.stringify({
+      providers: { lmstudio: { models: [{ id: "m1", contextWindow: "not-a-number" }] } },
+    });
+    const priorBackup = `${path}.10.bak`;
+    const ports = memoryPorts({ [path]: corrupted, [priorBackup]: "an earlier good version" });
+
+    const outcome = await commit(ports, path, "lmstudio", { models: [{ id: "m2" }] });
+
+    expect(outcome.kind).toBe("invalid");
+    if (outcome.kind === "invalid") {
+      expect(outcome.backups).toEqual([priorBackup]);
+    }
+  });
+
+  it("surfaces available backup paths on an invalid outcome for existing malformed JSON too", async () => {
+    const priorBackup = `${path}.10.bak`;
+    const ports = memoryPorts({ [path]: "{ not json", [priorBackup]: "an earlier good version" });
+
+    const outcome = await commit(ports, path, "lmstudio", { models: [{ id: "m2" }] });
+
+    expect(outcome.kind).toBe("invalid");
+    if (outcome.kind === "invalid") {
+      expect(outcome.backups).toEqual([priorBackup]);
+    }
   });
 
   it("writes successfully and surfaces lint warnings for unknown compat keys without blocking", async () => {
