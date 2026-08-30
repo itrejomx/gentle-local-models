@@ -24,3 +24,12 @@ Sweep: 1 (standard tier). `vitest run` 24/24 green pre-fix. No other BLOCKER/CRI
 | id | lens | location | severity | status | evidence |
 |---|---|---|---|---|---|
 | R3-004 | reliability | extensions/local-models/presets.ts:68 | CRITICAL | fixed | `startsWith` matched against the full lowercased id, so namespaced HuggingFace-style ids (e.g. `zai-org/glm-4.7-flash`, `unsloth/qwen3.6-27b`) never matched their family; refuter verdict STANDS; fixed by matching `startsWith` against the basename after the last `/`. |
+
+## PR4 context.ts (`pr4-context`) — R3 reliability, 2026-08-30
+
+Sweep: 1 (standard tier, R3 lens). `vitest run` 39/41 green pre-fix (2 new RED tests failing as expected). No other BLOCKER/CRITICAL findings survived refutation.
+
+| id | lens | location | severity | status | evidence |
+|---|---|---|---|---|---|
+| R3-005 | reliability | extensions/local-models/context.ts:81-101 (`parseLlamaSwapCtxSize`) | CRITICAL | fixed | comment lines inside scan window matched by ctx-size regex, first match wins; refuter STANDS noting latent-only exposure today; fixed by skipping comment lines. |
+| R3-006 | reliability | extensions/local-models/context.ts (`ContextPorts.readLlamaSwapConfig`) | WARNING | info | ContextPorts.readLlamaSwapConfig has no handling for a rejecting port; Phase 7 shell port implementation must catch fs errors and return undefined — Phase 7 acceptance note. |
