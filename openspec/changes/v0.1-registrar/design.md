@@ -173,6 +173,17 @@ interface WriterPorts {           // injected — makes the writer unit-testable
 | Integration | full `commit()` against a temp dir | real `fs` under `os.tmpdir()`; asserts backup exists, no field overwritten, restore on `verifyWritten` failure |
 | Manual E2E | `add` against mlx-serve `:11234` / llama-swap `:8080`, then `/model` and `pi --list-models` | documented checklist — needs a live Server and Pi runtime, not automated in v0.1 |
 
+## Known limitations
+
+- **Single-read stale window in `commit()`** (PR6 review, R4-003/R1-004): `commit()` reads
+  `models.json` once at the start of its orchestration and writes back a merge of that
+  snapshot. An external write to `models.json` landing between the read and the write is
+  clobbered, and — because the backup rotation only ever captures `commit()`'s OWN read
+  snapshot — that external write is not captured in any backup either. Accepted for v0.1:
+  the window is millisecond-scale and this is an interactively-invoked, single-user CLI
+  command, not a long-running service with concurrent writers. Revisit if a batch/scripted
+  mode (multiple concurrent `add`/`prune` invocations) arrives.
+
 ## Migration / Rollout
 
 No migration. Runtime rollback = restore newest `models.json.<epoch>.bak` (automatic on
