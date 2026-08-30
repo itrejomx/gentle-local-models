@@ -33,3 +33,12 @@ Sweep: 1 (standard tier, R3 lens). `vitest run` 39/41 green pre-fix (2 new RED t
 |---|---|---|---|---|---|
 | R3-005 | reliability | extensions/local-models/context.ts:81-101 (`parseLlamaSwapCtxSize`) | CRITICAL | fixed | comment lines inside scan window matched by ctx-size regex, first match wins; refuter STANDS noting latent-only exposure today; fixed by skipping comment lines. |
 | R3-006 | reliability | extensions/local-models/context.ts (`ContextPorts.readLlamaSwapConfig`) | WARNING | info | ContextPorts.readLlamaSwapConfig has no handling for a rejecting port; Phase 7 shell port implementation must catch fs errors and return undefined — Phase 7 acceptance note. |
+
+## PR5 state.ts (`pr5-state`) — R3 reliability, 2026-08-30
+
+Sweep: 1 (standard tier, R3 lens). `vitest run` 54/54 green pre-fix. Editor TS7006 diagnostic REFUTED: tsconfig has `strict: true`, `npx tsc --noEmit` exits 0, a third LSP-only artifact (see PR1/PR2 entries for the first two). One CRITICAL finding survived refutation; fixed with a one-line guard.
+
+| id | lens | location | severity | status | evidence |
+|---|---|---|---|---|---|
+| R3-007 | reliability | extensions/local-models/state.ts:84-87 (`labelOf`) | CRITICAL | fixed | `server?.models[modelId]` — optional chaining guarded `server` but not `.models`, so a parseable state file whose server record lacks `models` (passes the shallow `isValid`) made `labelOf` throw `TypeError`, breaking the module's fail-closed convention (`ownerOf` uses `?? "unknown"`); refuter verdict STANDS, with the severity note that there is no live caller until Phase 7/8; fixed by changing the access to `server?.models?.[modelId]` so `labelOf` returns `undefined` instead of throwing. |
+| R3-008 | reliability | tests/state.test.ts | WARNING | info | forward-compat test asserts known fields only and would not catch a refactor dropping unknown keys — strengthen when touching state.ts next. |
