@@ -317,19 +317,35 @@ export async function add(input: string, ctx: AddContext, ports: AddPorts): Prom
     notify(ctx.ui, `contextWindow omitted for: ${placeholderModels.join(", ")} — set it manually before compaction.`, "warning");
   }
 
-  const state = await loadState(ports.state);
-  const existingIdx = state.servers.findIndex((server) => server.providerKey === providerKey);
-  const servingMode = probeResult.models.length > 1 ? "on-demand" : "single-model";
-  const record: ServerRecord = {
-    baseUrl,
-    kind,
-    servingMode,
-    providerKey,
-    owner: "plugin",
-    models: { ...(existingIdx >= 0 ? state.servers[existingIdx].models : {}), ...labels },
-  };
-  const servers = existingIdx >= 0 ? state.servers.map((server, i) => (i === existingIdx ? record : server)) : [...state.servers, record];
-  await saveState(ports.state, { ...state, servers });
+  // R4-006: models.json is already the source of truth and was written
+  // successfully above — a failure here loses ONLY our own bookkeeping
+  // (context labels/ownership), never the registered Provider itself. Guard
+  // it explicitly so a rejecting/throwing StatePorts implementation never
+  // escapes `add()` unhandled, and report the loss honestly rather than
+  // silently pretending it was saved.
+  try {
+    const state = await loadState(ports.state);
+    const existingIdx = state.servers.findIndex((server) => server.providerKey === providerKey);
+    const servingMode = probeResult.models.length > 1 ? "on-demand" : "single-model";
+    const record: ServerRecord = {
+      baseUrl,
+      kind,
+      servingMode,
+      providerKey,
+      owner: "plugin",
+      models: { ...(existingIdx >= 0 ? state.servers[existingIdx].models : {}), ...labels },
+    };
+    const servers = existingIdx >= 0 ? state.servers.map((server, i) => (i === existingIdx ? record : server)) : [...state.servers, record];
+    await saveState(ports.state, { ...state, servers });
+  } catch (error) {
+    notify(
+      ctx.ui,
+      `Registered in models.json, but plugin bookkeeping failed (${
+        error instanceof Error ? error.message : String(error)
+      }): context labels and ownership were not saved. Fix the cause and re-run add.`,
+      "warning",
+    );
+  }
 }
 
 async function realVerifyWritten(

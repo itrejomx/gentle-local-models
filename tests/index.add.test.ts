@@ -489,6 +489,28 @@ describe("add — successful write records plugin-owned state", () => {
   });
 });
 
+describe("add — guards state persistence after a successful write (R4-006)", () => {
+  it("resolves without throwing and notifies both the registration success and the bookkeeping failure", async () => {
+    const ctx = fakeCtx();
+    const state = fakeStatePorts();
+    state.writeState = vi.fn(async () => {
+      throw new Error("disk full");
+    });
+    const ports = basePorts({ state });
+
+    await expect(add("localhost:11234", ctx, ports)).resolves.toBeUndefined();
+
+    expect(ctx.notify).toHaveBeenCalledWith(expect.stringContaining("Registered"), "info");
+    expect(ctx.notify).toHaveBeenCalledWith(
+      expect.stringContaining("plugin bookkeeping failed"),
+      "warning",
+    );
+    const registeredCallIndex = ctx.notify.mock.calls.findIndex(([msg]) => String(msg).includes("Registered"));
+    const bookkeepingCallIndex = ctx.notify.mock.calls.findIndex(([msg]) => String(msg).includes("plugin bookkeeping failed"));
+    expect(bookkeepingCallIndex).toBeGreaterThan(registeredCallIndex);
+  });
+});
+
 describe("add — WriteOutcome rendering (every kind gets a distinct message)", () => {
   it("written: notifies success and surfaces lint warnings", async () => {
     const existingFile = JSON.stringify({
