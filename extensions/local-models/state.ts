@@ -83,7 +83,7 @@ export function ownerOf(state: PluginState, providerKey: string): Owner {
 /** Looks up a (Provider, model) pair's context label, or undefined if not recorded. */
 export function labelOf(state: PluginState, providerKey: string, modelId: string): ModelLabel | undefined {
   const server = state.servers.find((s) => s.providerKey === providerKey);
-  return server?.models[modelId];
+  return server?.models?.[modelId];
 }
 
 /** Returns a new PluginState with the given (Provider, model) pair's label set. Does not mutate `state`. */

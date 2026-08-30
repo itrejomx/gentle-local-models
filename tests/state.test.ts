@@ -155,6 +155,28 @@ describe("labelOf / withLabel — per-(provider,model) context labels", () => {
       contextSource: "prompt",
     });
   });
+
+  it("returns undefined (not a throw) when a loaded server record has no `models` map (hand-edited state file)", async () => {
+    const raw = JSON.stringify({
+      version: 1,
+      piVersion: "0.9.2",
+      servers: [
+        {
+          baseUrl: "http://localhost:11234/v1",
+          kind: "mlx-serve",
+          servingMode: "single-model",
+          providerKey: "mlx-serve-local",
+          owner: "plugin",
+        },
+      ],
+    });
+    const ports = memoryPorts(raw);
+    const state = await load(ports);
+
+    expect(() => labelOf(state, "mlx-serve-local", "any-model")).not.toThrow();
+    expect(labelOf(state, "mlx-serve-local", "any-model")).toBeUndefined();
+    expect(ownerOf(state, "mlx-serve-local")).toBe("plugin");
+  });
 });
 
 describe("withLastError — lastError update path (feeds list/prune reporting)", () => {
