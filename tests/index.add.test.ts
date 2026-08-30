@@ -568,6 +568,36 @@ describe("add — WriteOutcome rendering (every kind gets a distinct message)", 
     expect(ctx.notify).toHaveBeenCalledWith(expect.stringContaining("restoring"), "error");
   });
 
+  it("write-failed/restore/unverified-write (R2-006): names the file, the backup, and instructs manual inspection", async () => {
+    const existingFile = JSON.stringify({ providers: {} });
+    const ctx = fakeCtx();
+    const writer = fakeWriterPorts(
+      { "/pi/agent/models.json": existingFile },
+      { verify: async () => ({ ok: false, error: "empty provider map" }) },
+    );
+    let listBackupsCalls = 0;
+    const originalListBackups = writer.listBackups.bind(writer);
+    writer.listBackups = vi.fn(async (path: string) => {
+      listBackupsCalls++;
+      if (listBackupsCalls > 1) {
+        throw new Error("listBackups exploded on retry");
+      }
+      return originalListBackups(path);
+    });
+    const ports = basePorts({ writer: { path: "/pi/agent/models.json", ports: writer } });
+
+    await add("localhost:11234", ctx, ports);
+
+    const [message] = ctx.notify.mock.calls.find(([, type]) => type === "error") ?? [];
+    const text = String(message);
+    // Must name the models.json path AS THE THING THAT MAY BE CORRUPTED — not
+    // merely as a substring of the backup filename (the old generic message
+    // never used the word "corrupted" at all, only the enum "unverified-write").
+    expect(text).toContain("/pi/agent/models.json may be corrupted");
+    expect(text).toContain("/pi/agent/models.json.1000.bak");
+    expect(text).toMatch(/inspect/i);
+  });
+
   it("write-failed (R3-013): notifies the failing stage and the file state left behind", async () => {
     const ctx = fakeCtx();
     const writer = fakeWriterPorts();

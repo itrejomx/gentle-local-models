@@ -97,13 +97,30 @@ function renderOutcome(outcome: WriteOutcome, writerPath: string): { message: st
         message: `Write failed (${outcome.error}), and restoring backup ${outcome.path} also failed (${outcome.reason}). The failed write is left in place at ${writerPath} — inspect manually.`,
         type: "error",
       };
-    case "write-failed":
+    case "write-failed": {
+      // R2-006: `stage:"restore"`/`fileState:"unverified-write"` means the
+      // restore machinery itself blew up while already trying to recover
+      // from a bad write — the file at `writerPath` may hold that bad,
+      // unconfirmed write. That is at least as actionable as the
+      // `restore-failed` message above: name the file, name the newest
+      // backup when one exists, and tell the user to inspect/restore
+      // manually rather than trusting the enum alone.
+      if (outcome.stage === "restore" && outcome.fileState === "unverified-write") {
+        const backupNote = outcome.backup
+          ? `The newest backup is at ${outcome.backup} — restore it manually after inspecting ${writerPath}.`
+          : `No backup is available — inspect ${writerPath} manually before trusting it.`;
+        return {
+          message: `Write failed during restore: ${outcome.error}. ${writerPath} may be corrupted or contain an unverified write. ${backupNote}`,
+          type: "error",
+        };
+      }
       return {
         message: `Write failed during ${outcome.stage}: ${outcome.error}. File state: ${outcome.fileState}${
           outcome.backup ? ` (backup: ${outcome.backup})` : ""
         }.`,
         type: "error",
       };
+    }
   }
 }
 
