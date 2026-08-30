@@ -69,8 +69,8 @@ Greenfield package + 5 pure core modules + shell + UI wrappers, each with paired
 - [x] 6.2 GREEN `ui/*.ts`: thin wrappers, no business logic.
 
 ## Phase 7: index.ts — add (D-003, D-005, D-006, D-007)
-- [ ] 7.1 RED `tests/index.add.test.ts`: normalize→probe→kind select (warn omlx/mtplx-rewritten key)→presets.provider; `context.resolve` called ONLY for models missing `contextWindow` (D-005, preserved value never relabeled); `unresolved`+interactive→`ctx.ui.editor(title,"32768")` accepted→`declarado` (D-006); editor cancel(undefined)→omit+`placeholder`+warn (D-007), same path as non-interactive; thinking proposal w/ override; commit()+state.save().
-- [ ] 7.2 GREEN `index.ts` `add`, guarding `context.resolve` call per D-005.
+- [x] 7.1 RED `tests/index.add.test.ts`: normalize→probe→kind select (warn omlx/mtplx-rewritten key)→presets.provider; `context.resolve` called ONLY for models missing `contextWindow` (D-005, preserved value never relabeled); `unresolved`+interactive→`ctx.ui.editor(title,"32768")` accepted→`declarado` (D-006); editor cancel(undefined)→omit+`placeholder`+warn (D-007), same path as non-interactive; thinking proposal w/ override; commit()+state.save().
+- [x] 7.2 GREEN `index.ts` `add`, guarding `context.resolve` call per D-005.
 
 ## Phase 8: index.ts — list + prune (D-004)
 - [ ] 8.1 RED `tests/index.list.test.ts`: base URLs = models.json Providers ∪ state.servers (deduped); each probed; failures render "not detected" + last error; state.lastError updated.
