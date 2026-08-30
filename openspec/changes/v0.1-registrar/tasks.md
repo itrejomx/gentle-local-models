@@ -55,8 +55,8 @@ Greenfield package + 5 pure core modules + shell + UI wrappers, each with paired
 - [x] 3.2 GREEN `context.ts`: `resolve(model, sources, ports)`; no `ctx`/`ui` import — core stays pure.
 
 ## Phase 4: state.ts (D-002)
-- [ ] 4.1 RED `tests/state.test.ts`: `PluginState` load/save incl. owner/lastError/model labels; default owner `unknown`; lastError update path (feeds D-004).
-- [ ] 4.2 GREEN `state.ts`: read/write `gentle-local-models.json` via injected fs port only.
+- [x] 4.1 RED `tests/state.test.ts`: `PluginState` load/save incl. owner/lastError/model labels; default owner `unknown`; lastError update path (feeds D-004).
+- [x] 4.2 GREEN `state.ts`: read/write `gentle-local-models.json` via injected fs port only.
 
 ## Phase 5: models-writer.ts (R2, D-001)
 - [ ] 5.1 RED unit `tests/models-writer.test.ts`: fill-never-overwrite; comment guard refuses+reports; invalid mirror-schema blocks write, file untouched; unknown compat key warns, doesn't block; backup rotation caps at 10. Fixture carries real `lmstudio` block.
