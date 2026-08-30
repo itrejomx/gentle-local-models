@@ -73,10 +73,10 @@ Greenfield package + 5 pure core modules + shell + UI wrappers, each with paired
 - [x] 7.2 GREEN `index.ts` `add`, guarding `context.resolve` call per D-005.
 
 ## Phase 8: index.ts — list + prune (D-004)
-- [ ] 8.1 RED `tests/index.list.test.ts`: base URLs = models.json Providers ∪ state.servers (deduped); each probed; failures render "not detected" + last error; state.lastError updated.
-- [ ] 8.2 GREEN `index.ts` `list` via `detect.probeAll` + `state.ts`.
-- [ ] 8.3 RED `tests/index.prune.test.ts`: any local Provider incl. external; ownership per row; ONE confirmation per run; backup before any change.
-- [ ] 8.4 GREEN `index.ts` `prune`.
+- [x] 8.1 RED `tests/index.list.test.ts`: base URLs = models.json Providers ∪ state.servers (deduped); each probed; failures render "not detected" + last error; state.lastError updated.
+- [x] 8.2 GREEN `index.ts` `list` via `detect.probeAll` + `state.ts`.
+- [x] 8.3 RED `tests/index.prune.test.ts`: any local Provider incl. external; ownership per row; ONE confirmation per run; backup before any change.
+- [x] 8.4 GREEN `index.ts` `prune`.
 
 ## Phase 9: Docs & final verification
 - [ ] 9.1 `extensions/local-models/README.md`: dev loop — symlink, `/reload` (D7).
