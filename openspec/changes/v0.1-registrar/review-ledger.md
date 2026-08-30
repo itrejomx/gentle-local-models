@@ -86,3 +86,7 @@ All fixed rows verified against the fix diff (45a7f78..342f877); 89/89 green, ts
 |---|---|---|---|---|---|
 | R3-013 | reliability | models-writer.ts (`write-failed` variant) | WARNING | info | No test produces or asserts `kind:"write-failed"` (stage/fileState unverified by assertion; logic confirmed by inspection). Cover when Phase 7 wires failure paths. |
 | R3-014 | reliability | integration realFsPorts.writeFile / WriterPorts JSDoc | WARNING | info | Reference tmp+rename leaves an orphaned tmp file if rename throws; not cleaned, not documented, and Phase 7 is told to copy this implementation. Add cleanup or document when building the real port. |
+
+## PR7 ui wrappers (`pr6-writer...pr7-ui`) — R3 reliability, 2026-08-30
+
+Sweep: 1 (standard tier, ~267 lines). 102/102 green, tsc clean, no test.only. withLoader finally-restore + rethrow verified; promptWithPrefill matches D5 (hasUI guard, cancel passthrough, no coercion); all five wrappers' signatures cross-checked against Pi's real ExtensionUIContext (types.d.ts:68-192) — all match. **Empty ledger: no findings survived the sweep.**
