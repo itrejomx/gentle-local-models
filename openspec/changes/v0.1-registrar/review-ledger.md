@@ -77,3 +77,12 @@ No refutations.
 
 Verification after fix round 1: `npx vitest run` 89/89 green; `npx tsc --noEmit`
 exits 0.
+
+### PR6 fix-round scoped re-review (2026-08-30) — CONVERGED
+
+All fixed rows verified against the fix diff (45a7f78..342f877); 89/89 green, tsc clean. Round 2 not required. New info rows from fix-touched lines:
+
+| id | lens | location | severity | status | evidence |
+|---|---|---|---|---|---|
+| R3-013 | reliability | models-writer.ts (`write-failed` variant) | WARNING | info | No test produces or asserts `kind:"write-failed"` (stage/fileState unverified by assertion; logic confirmed by inspection). Cover when Phase 7 wires failure paths. |
+| R3-014 | reliability | integration realFsPorts.writeFile / WriterPorts JSDoc | WARNING | info | Reference tmp+rename leaves an orphaned tmp file if rename throws; not cleaned, not documented, and Phase 7 is told to copy this implementation. Add cleanup or document when building the real port. |
