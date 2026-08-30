@@ -211,6 +211,41 @@ describe("mergeProvider — fill-never-overwrite (R2)", () => {
     // The 18th, genuinely new model was added with conservative defaults.
     expect(models).toContainEqual({ id: "qwen/qwen3-32b", name: "qwen/qwen3-32b", contextWindow: 262144, maxTokens: 4096 });
   });
+
+  it("fills Provider-level headers/authHeader when missing (Phase 7 mtplx/omlx per-kind extras)", () => {
+    const input: ProviderInput = {
+      baseUrl: "http://localhost:8000/v1",
+      apiKey: "local",
+      headers: { "x-mtplx-client": "pi" },
+      models: [],
+    };
+
+    const merged = mergeProvider({}, "mtplx", input) as {
+      providers: { mtplx: { headers: Record<string, string> } };
+    };
+
+    expect(merged.providers.mtplx.headers).toEqual({ "x-mtplx-client": "pi" });
+  });
+
+  it("never overwrites an existing headers/authHeader block", () => {
+    const existing = {
+      providers: {
+        omlx: { authHeader: false, headers: { "x-custom": "kept" }, models: [] },
+      },
+    };
+    const input: ProviderInput = {
+      authHeader: true,
+      headers: { "x-custom": "new" },
+      models: [],
+    };
+
+    const merged = mergeProvider(existing, "omlx", input) as {
+      providers: { omlx: { authHeader: boolean; headers: Record<string, string> } };
+    };
+
+    expect(merged.providers.omlx.authHeader).toBe(false);
+    expect(merged.providers.omlx.headers).toEqual({ "x-custom": "kept" });
+  });
 });
 
 describe("validate — pre-write mirrored-schema validation (R2)", () => {
@@ -236,6 +271,17 @@ describe("validate — pre-write mirrored-schema validation (R2)", () => {
     const result = validate(bad);
 
     expect(result.ok).toBe(false);
+  });
+
+  it("accepts a Provider carrying headers and authHeader (mtplx/omlx per-kind extras)", () => {
+    const file = {
+      providers: {
+        mtplx: { baseUrl: "http://localhost:8000/v1", apiKey: "local", headers: { "x-mtplx-client": "pi" }, models: [] },
+        omlx: { authHeader: true, models: [] },
+      },
+    };
+
+    expect(validate(file)).toEqual({ ok: true });
   });
 });
 

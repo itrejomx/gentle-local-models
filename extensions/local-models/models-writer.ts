@@ -59,6 +59,11 @@ export interface ProviderInput {
   baseUrl?: string;
   apiKey?: string;
   compat?: CompatBlock;
+  // Per-kind extras the Phase 7 shell composes alongside `compat` (never
+  // returned by presets.provider() itself — see presets.ts's Phase 2 scope
+  // decision): mtplx's `x-mtplx-client` header, omlx's `authHeader` flag.
+  headers?: Record<string, string>;
+  authHeader?: boolean;
   models: ModelInput[];
 }
 
@@ -228,6 +233,12 @@ export function mergeProvider(existingRaw: unknown, providerKey: string, input: 
   if (provider.compat === undefined && input.compat !== undefined) {
     provider.compat = input.compat;
   }
+  if (provider.headers === undefined && input.headers !== undefined) {
+    provider.headers = input.headers;
+  }
+  if (provider.authHeader === undefined && input.authHeader !== undefined) {
+    provider.authHeader = input.authHeader;
+  }
 
   const models = asArray(provider.models).map((m) => asObject(m));
   const byId = new Map(models.map((m) => [m.id as string, m]));
@@ -278,6 +289,11 @@ const ProviderSchema = Type.Object({
   baseUrl: Type.Optional(Type.String({ minLength: 1 })),
   apiKey: Type.Optional(Type.String({ minLength: 1 })),
   compat: Type.Optional(ProviderCompatSchema),
+  // Phase 7 per-kind extras (mtplx headers, omlx authHeader) — declared here
+  // for mirror accuracy even though the permissive schema (no
+  // additionalProperties: false) already tolerated them unlisted.
+  headers: Type.Optional(Type.Record(Type.String(), Type.String())),
+  authHeader: Type.Optional(Type.Boolean()),
   models: Type.Optional(Type.Array(ModelEntrySchema)),
 });
 
