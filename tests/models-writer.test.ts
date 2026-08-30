@@ -332,13 +332,88 @@ describe("commit — full orchestration against stubbed WriterPorts (R2)", () =>
     expect(JSON.parse(ports.files[path]).providers.lmstudio.models[0].id).toBe("m1");
   });
 
-  it("auto-restores the newest backup when verifyWritten reports an empty Provider map", async () => {
+  it("auto-restores the newest backup when verifyWritten reports an empty Provider map, naming the backup restored from", async () => {
     const original = JSON.stringify({ providers: { lmstudio: { models: [{ id: "m1", name: "m1" }] } } });
     const ports = memoryPorts({ [path]: original }, { now: 42, verify: async () => ({ ok: false, error: "empty provider map" }) });
 
     const outcome = await commit(ports, path, "lmstudio", { models: [{ id: "m2" }] });
 
-    expect(outcome).toEqual({ kind: "restored", backup: `${path}.42.bak`, error: "empty provider map" });
+    expect(outcome).toEqual({
+      kind: "restored",
+      path: `${path}.42.bak`,
+      error: "empty provider map",
+      verification: { ok: false, error: "empty provider map" },
+    });
     expect(ports.files[path]).toBe(original);
+  });
+
+  it("re-verifies after a successful restore (D3: restore, refresh again, report) and calls verifyWritten twice", async () => {
+    const original = JSON.stringify({ providers: { lmstudio: { models: [{ id: "m1", name: "m1" }] } } });
+    let calls = 0;
+    const verify: WriterPorts["verifyWritten"] = async () => {
+      calls++;
+      return calls === 1 ? { ok: false, error: "empty provider map" } : { ok: true };
+    };
+    const ports = memoryPorts({ [path]: original }, { now: 42, verify });
+
+    const outcome = await commit(ports, path, "lmstudio", { models: [{ id: "m2" }] });
+
+    expect(calls).toBe(2);
+    expect(outcome).toEqual({
+      kind: "restored",
+      path: `${path}.42.bak`,
+      error: "empty provider map",
+      verification: { ok: true },
+    });
+    expect(ports.files[path]).toBe(original);
+  });
+
+  it("reports a distinct rolled-back-to-no-file variant, with no ambiguous backup sentinel, when no backup exists", async () => {
+    const ports = memoryPorts({}, { now: 5, verify: async () => ({ ok: false, error: "empty provider map" }) });
+
+    const outcome = await commit(ports, path, "lmstudio", { models: [{ id: "m1" }] });
+
+    expect(outcome).toEqual({ kind: "rolled-back", error: "empty provider map" });
+    expect(ports.files[path]).toBeUndefined();
+  });
+
+  it("reports restore-failed and leaves the failed write in place, honestly, when the newest backup is unreadable", async () => {
+    const original = JSON.stringify({ providers: { lmstudio: { models: [{ id: "m1", name: "m1" }] } } });
+    const backupPath = `${path}.42.bak`;
+    const files: Record<string, string> = { [path]: original };
+    const ports: WriterPorts & { files: Record<string, string> } = {
+      files,
+      async readFile(p: string) {
+        if (p.endsWith(".bak")) {
+          return undefined; // every backup is unreadable/corrupted
+        }
+        return files[p];
+      },
+      async writeFile(p: string, contents: string) {
+        files[p] = contents;
+      },
+      async deleteFile(p: string) {
+        delete files[p];
+      },
+      async listBackups() {
+        return [backupPath];
+      },
+      now: () => 42,
+      verifyWritten: async () => ({ ok: false, error: "empty provider map" }),
+    };
+
+    const outcome = await commit(ports, path, "lmstudio", { models: [{ id: "m2" }] });
+
+    expect(outcome).toEqual({
+      kind: "restore-failed",
+      path: backupPath,
+      reason: "backup file is unreadable",
+      error: "empty provider map",
+    });
+    // The failed write is still there — honestly reported, not silently discarded.
+    expect(JSON.parse(ports.files[path]).providers.lmstudio.models.map((m: { id: string }) => m.id)).toEqual([
+      "m1",
+      "m2",
+    ]);
   });
 });

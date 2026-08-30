@@ -104,7 +104,12 @@ describe("commit — real filesystem integration (D-001, D3)", () => {
 
     const outcome = await commit(ports, modelsPath, "lmstudio", { models: [{ id: "m2" }] });
 
-    expect(outcome).toEqual({ kind: "restored", backup: `${modelsPath}.3000.bak`, error: "empty provider map" });
+    expect(outcome).toEqual({
+      kind: "restored",
+      path: `${modelsPath}.3000.bak`,
+      error: "empty provider map",
+      verification: { ok: false, error: "empty provider map" },
+    });
     const restoredContents = await readFile(modelsPath, "utf-8");
     expect(restoredContents).toBe(original);
   });
@@ -114,7 +119,7 @@ describe("commit — real filesystem integration (D-001, D3)", () => {
 
     const outcome = await commit(ports, modelsPath, "lmstudio", { models: [{ id: "m1" }] });
 
-    expect(outcome).toEqual({ kind: "restored", backup: "", error: "empty provider map" });
+    expect(outcome).toEqual({ kind: "rolled-back", error: "empty provider map" });
     await expect(readFile(modelsPath, "utf-8")).rejects.toMatchObject({ code: "ENOENT" });
   });
 });

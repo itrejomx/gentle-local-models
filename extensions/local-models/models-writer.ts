@@ -66,7 +66,25 @@ export type WriteOutcome =
   | { kind: "written"; backup?: string; lint: string[] }
   | { kind: "refused"; reason: "comments" }
   | { kind: "invalid"; errors: string[] }
-  | { kind: "restored"; backup: string; error: string };
+  // A prior backup existed and was restored. `verification` is the result of
+  // re-running `verifyWritten` against the restored content (D3: restore →
+  // refresh again → report) — restoring is not itself proof the restored
+  // state is good, so that second check rides along honestly.
+  | {
+      kind: "restored";
+      path: string;
+      error: string;
+      verification: { ok: true } | { ok: false; error: string };
+    }
+  // No backup existed (first-ever write): rolled back to "file does not
+  // exist" rather than leaving the failed write in place. Distinct from
+  // `restored` — nothing was restored — so callers never have to guess what
+  // an empty `backup: ""` sentinel meant.
+  | { kind: "rolled-back"; error: string }
+  // A backup existed but restoring from it failed (the backup itself is
+  // unreadable, or writing it back failed). The failed write is left in
+  // `path` untouched — reported honestly rather than silently discarded.
+  | { kind: "restore-failed"; path: string; reason: string; error: string };
 
 function asObject(value: unknown): Json {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? { ...(value as Json) } : {};
@@ -274,6 +292,10 @@ export function lint(fileRaw: unknown): string[] {
   return warnings;
 }
 
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function backupEpoch(backupPath: string): number {
   const match = backupPath.match(/\.(\d+)\.bak$/);
   return match ? Number(match[1]) : 0;
@@ -303,20 +325,37 @@ export async function rotateBackups(
   return backupPath;
 }
 
-async function restoreNewestBackup(ports: WriterPorts, path: string): Promise<string | undefined> {
+/** What actually happened when `commit()` tried to recover from a bad write. */
+type RestoreResult =
+  | { status: "restored"; path: string }
+  | { status: "rolled-back-no-backup" }
+  | { status: "restore-failed"; path: string; reason: string };
+
+async function restoreNewestBackup(ports: WriterPorts, path: string): Promise<RestoreResult> {
   const backups = await ports.listBackups(path);
   const newest = [...backups].sort((a, b) => backupEpoch(b) - backupEpoch(a))[0];
   if (newest === undefined) {
     // No prior state to restore to (first-ever write): roll back to
     // "file does not exist" rather than leaving a bad write in place (D6).
     await ports.deleteFile(path);
-    return undefined;
+    return { status: "rolled-back-no-backup" };
   }
+
   const contents = await ports.readFile(newest);
-  if (contents !== undefined) {
-    await ports.writeFile(path, contents);
+  if (contents === undefined) {
+    // The newest backup is itself unreadable (corrupted/missing on disk).
+    // Do NOT touch `path` — it still holds the failed write, and reporting
+    // that honestly beats silently discarding it (B+F).
+    return { status: "restore-failed", path: newest, reason: "backup file is unreadable" };
   }
-  return newest;
+
+  try {
+    await ports.writeFile(path, contents);
+  } catch (error) {
+    return { status: "restore-failed", path: newest, reason: `restore write failed: ${errorMessage(error)}` };
+  }
+
+  return { status: "restored", path: newest };
 }
 
 /**
@@ -345,7 +384,7 @@ export async function commit(
     } catch (error) {
       return {
         kind: "invalid",
-        errors: [`existing models.json is not valid JSON: ${error instanceof Error ? error.message : String(error)}`],
+        errors: [`existing models.json is not valid JSON: ${errorMessage(error)}`],
       };
     }
   }
@@ -370,9 +409,44 @@ export async function commit(
   const verification = await ports.verifyWritten(providerKey, modelIds);
 
   if (!verification.ok) {
-    const restoredFrom = await restoreNewestBackup(ports, path);
-    return { kind: "restored", backup: restoredFrom ?? "", error: verification.error };
+    return recoverFromFailedWrite(ports, path, providerKey, modelIds, verification.error);
   }
 
   return { kind: "written", backup: backupPath, lint: lintWarnings };
+}
+
+/**
+ * Runs the recovery path after a write is known to be bad (`verifyWritten`
+ * reported failure): restore the newest backup, then honestly report what
+ * actually happened (B+F) — `restored` (with a second `verifyWritten` per
+ * D3), `rolled-back` (no backup existed), or `restore-failed` (the failed
+ * write is left in place).
+ */
+async function recoverFromFailedWrite(
+  ports: WriterPorts,
+  path: string,
+  providerKey: string,
+  modelIds: string[],
+  triggeringError: string,
+): Promise<WriteOutcome> {
+  const restoreResult = await restoreNewestBackup(ports, path);
+
+  if (restoreResult.status === "rolled-back-no-backup") {
+    return { kind: "rolled-back", error: triggeringError };
+  }
+
+  if (restoreResult.status === "restore-failed") {
+    return {
+      kind: "restore-failed",
+      path: restoreResult.path,
+      reason: restoreResult.reason,
+      error: triggeringError,
+    };
+  }
+
+  // Successful restore (D3): refresh again and report that second
+  // verification's result too — a successful restore is not itself proof
+  // the restored content is good.
+  const verification = await ports.verifyWritten(providerKey, modelIds);
+  return { kind: "restored", path: restoreResult.path, error: triggeringError, verification };
 }
