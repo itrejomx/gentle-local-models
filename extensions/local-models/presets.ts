@@ -65,6 +65,7 @@ export function thinking(
   }
 
   const id = modelId.toLowerCase();
-  const match = FAMILY_PREFIXES.find(([prefix]) => id.startsWith(prefix));
+  const basename = id.slice(id.lastIndexOf("/") + 1);
+  const match = FAMILY_PREFIXES.find(([prefix]) => basename.startsWith(prefix));
   return match?.[1];
 }

@@ -61,4 +61,17 @@ describe("thinking", () => {
   it("is case-insensitive when matching family prefixes", () => {
     expect(thinking("QWEN3-4B", true)).toBe("qwen");
   });
+
+  it("matches the family prefix against the basename after the last '/' for namespaced ids", () => {
+    expect(thinking("zai-org/glm-4.7-flash", true)).toBe("zai");
+    expect(thinking("unsloth/qwen3.6-27b", true)).toBe("qwen");
+  });
+
+  it("omits the proposal when only the namespace (not the basename) resembles a family", () => {
+    expect(thinking("lmstudio-community/laguna-xs-2.1", true)).toBeUndefined();
+  });
+
+  it("does not overmatch a family name appearing mid-id via substring", () => {
+    expect(thinking("Kwaipilot_KAT-Coder-V2.5-Dev-Q8_0", true)).toBeUndefined();
+  });
 });
