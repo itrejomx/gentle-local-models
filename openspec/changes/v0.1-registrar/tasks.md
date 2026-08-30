@@ -43,8 +43,8 @@ Greenfield package + 5 pure core modules + shell + UI wrappers, each with paired
 - [x] 0.5 GREEN fix assertion; `npx vitest run` → pass. Gate established.
 
 ## Phase 1: detect.ts (R1)
-- [ ] 1.1 RED `tests/detect.test.ts`: host:port/`/v1`/`/v1/` normalize equal; probe ≤1s; 200+empty-models = failure; unreachable → last error.
-- [ ] 1.2 GREEN `detect.ts`: `normalize()`, `probe(fetch, ms)`, `probeAll(urls)` (feeds D-004).
+- [x] 1.1 RED `tests/detect.test.ts`: host:port/`/v1`/`/v1/` normalize equal; probe ≤1s; 200+empty-models = failure; unreachable → last error.
+- [x] 1.2 GREEN `detect.ts`: `normalize()`, `probe(fetch, ms)`, `probeAll(urls)` (feeds D-004).
 
 ## Phase 2: presets.ts (R3)
 - [ ] 2.1 RED `tests/presets.test.ts`: table for mtplx/omlx/mlx-serve/llama-swap/generic; heuristic qwen→qwen, glm→zai, deepseek→deepseek, else omit; mixed-family server; no Provider-level thinkingFormat.
