@@ -460,6 +460,41 @@ describe("add — reasoning becomes user-confirmed, never heuristic-derived (R3-
   });
 });
 
+describe("add — re-add merges into existing state (R3-017)", () => {
+  it("preserves the first run's ModelLabel entries and updates the server record in place, not duplicated", async () => {
+    const ctx = fakeCtx();
+    ctx.editor.mockImplementation(async (title: string) => (title.includes("contextWindow") ? "32768" : undefined));
+    const writer = fakeWriterPorts();
+    const firstState = fakeStatePorts();
+    const firstPorts = basePorts({ writer: { path: "/pi/agent/models.json", ports: writer }, state: firstState });
+
+    await add("localhost:11234", ctx, firstPorts);
+
+    const persisted = firstState.writes.at(-1)!;
+    const afterFirstRun = JSON.parse(persisted);
+    expect(afterFirstRun.servers).toHaveLength(1);
+    expect(afterFirstRun.servers[0].models["qwen3-4b"]).toEqual({ contextLabel: "declarado", contextSource: "prompt" });
+
+    // Second run against the SAME Server: `models.json` already carries
+    // qwen3-4b's contextWindow (fill-never-overwrite never clears it), so
+    // D-005 skips context resolution/prompting entirely this run and writes
+    // no new label for it — the merge must fall through to the
+    // `existingIdx >= 0` branch and carry the first run's label through
+    // unchanged, not drop or relabel it.
+    ctx.notify.mockClear();
+    ctx.editor.mockClear();
+    const secondState = fakeStatePorts(persisted);
+    const secondPorts = basePorts({ writer: { path: "/pi/agent/models.json", ports: writer }, state: secondState });
+
+    await add("localhost:11234", ctx, secondPorts);
+
+    expect(ctx.editor).not.toHaveBeenCalledWith(expect.stringContaining("contextWindow"), expect.anything());
+    const afterSecondRun = JSON.parse(secondState.writes.at(-1)!);
+    expect(afterSecondRun.servers).toHaveLength(1);
+    expect(afterSecondRun.servers[0].models["qwen3-4b"]).toEqual({ contextLabel: "declarado", contextSource: "prompt" });
+  });
+});
+
 describe("add — successful write records plugin-owned state", () => {
   it("saves a new plugin-owned ServerRecord with baseUrl/kind/servingMode/providerKey", async () => {
     const ctx = fakeCtx();
