@@ -294,6 +294,39 @@ describe("rotateBackups — rotation cap at 10 (R2)", () => {
     expect(remaining).not.toContain(`${path}.1.bak`);
     expect(remaining).toContain(`${path}.11.bak`);
   });
+
+  it("suffixes the backup path when two commits land in the same clock tick, preserving both pre-images", async () => {
+    const path = "/fake/models.json";
+    const ports = memoryPorts({}, { now: 100 });
+
+    const first = await rotateBackups(ports, path, "pre-image-1");
+    const second = await rotateBackups(ports, path, "pre-image-2");
+
+    expect(first).toBe(`${path}.100.bak`);
+    expect(second).toBe(`${path}.100-1.bak`);
+    expect(await ports.readFile(first)).toBe("pre-image-1");
+    expect(await ports.readFile(second)).toBe("pre-image-2");
+    const remaining = await ports.listBackups(path);
+    expect(remaining).toHaveLength(2);
+  });
+
+  it("counts both same-tick backups toward the rotation cap, still pruning the true oldest", async () => {
+    const path = "/fake/models.json";
+    const existingBackups: Record<string, string> = {};
+    for (let epoch = 1; epoch <= 9; epoch++) {
+      existingBackups[`${path}.${epoch}.bak`] = `backup-${epoch}`;
+    }
+    const ports = memoryPorts(existingBackups, { now: 100 });
+
+    await rotateBackups(ports, path, "pre-image-1");
+    await rotateBackups(ports, path, "pre-image-2");
+
+    const remaining = await ports.listBackups(path);
+    expect(remaining).toHaveLength(10);
+    expect(remaining).toContain(`${path}.100.bak`);
+    expect(remaining).toContain(`${path}.100-1.bak`);
+    expect(remaining).not.toContain(`${path}.1.bak`);
+  });
 });
 
 describe("commit — full orchestration against stubbed WriterPorts (R2)", () => {

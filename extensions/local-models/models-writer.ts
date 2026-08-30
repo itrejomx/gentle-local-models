@@ -296,15 +296,35 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function backupEpoch(backupPath: string): number {
-  const match = backupPath.match(/\.(\d+)\.bak$/);
-  return match ? Number(match[1]) : 0;
+/**
+ * Parses a `{path}.{epoch}[-{suffix}].bak` name into a comparable key. The
+ * `-{suffix}` form (collision guard, A) only ever appears when a `-0`-free
+ * `{epoch}.bak` already existed, so a suffixed backup is always NEWER than
+ * its unsuffixed sibling at the same epoch.
+ */
+function backupKey(backupPath: string): { epoch: number; suffix: number } {
+  const match = backupPath.match(/\.(\d+)(?:-(\d+))?\.bak$/);
+  if (!match) {
+    return { epoch: 0, suffix: 0 };
+  }
+  return { epoch: Number(match[1]), suffix: match[2] !== undefined ? Number(match[2]) : 0 };
+}
+
+function compareBackupsAscending(a: string, b: string): number {
+  const ka = backupKey(a);
+  const kb = backupKey(b);
+  return ka.epoch - kb.epoch || ka.suffix - kb.suffix;
 }
 
 /**
  * Writes a new `{path}.{epoch}.bak` backup of `contents`, then prunes the
  * oldest backups beyond `cap` (default 10, per R2's rotation requirement).
  * Returns the newly created backup's path.
+ *
+ * Collision guard (A): if `{epoch}.bak` already exists — two commits landing
+ * in the same clock tick, plausible with a low-resolution `now()` or two
+ * rapid `add`s — the path is suffixed `-1`, `-2`, ... until free, so neither
+ * commit's pre-image is silently clobbered.
  */
 export async function rotateBackups(
   ports: WriterPorts,
@@ -312,11 +332,17 @@ export async function rotateBackups(
   contents: string,
   cap = 10,
 ): Promise<string> {
-  const backupPath = `${path}.${ports.now()}.bak`;
+  const epoch = ports.now();
+  let backupPath = `${path}.${epoch}.bak`;
+  let suffix = 0;
+  while ((await ports.readFile(backupPath)) !== undefined) {
+    suffix++;
+    backupPath = `${path}.${epoch}-${suffix}.bak`;
+  }
   await ports.writeFile(backupPath, contents);
 
   const backups = await ports.listBackups(path);
-  const sorted = [...backups].sort((a, b) => backupEpoch(a) - backupEpoch(b));
+  const sorted = [...backups].sort(compareBackupsAscending);
   const overflow = sorted.length - cap;
   for (let i = 0; i < overflow; i++) {
     await ports.deleteFile(sorted[i]);
@@ -333,7 +359,7 @@ type RestoreResult =
 
 async function restoreNewestBackup(ports: WriterPorts, path: string): Promise<RestoreResult> {
   const backups = await ports.listBackups(path);
-  const newest = [...backups].sort((a, b) => backupEpoch(b) - backupEpoch(a))[0];
+  const newest = [...backups].sort((a, b) => compareBackupsAscending(b, a))[0];
   if (newest === undefined) {
     // No prior state to restore to (first-ever write): roll back to
     // "file does not exist" rather than leaving a bad write in place (D6).
