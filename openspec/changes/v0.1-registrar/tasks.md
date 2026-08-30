@@ -51,8 +51,8 @@ Greenfield package + 5 pure core modules + shell + UI wrappers, each with paired
 - [x] 2.2 GREEN `presets.ts`: `provider(kind)` + `thinking(model)` + pre-write override.
 
 ## Phase 3: context.ts (R4, D-003)
-- [ ] 3.1 RED `tests/context.test.ts`: chain `/v1/models`→`/props`→config.yaml `--ctx-size` (injected fs port), all `verificado`; no source → `{kind:"unresolved"}`, never prompts.
-- [ ] 3.2 GREEN `context.ts`: `resolve(model, sources, ports)`; no `ctx`/`ui` import — core stays pure.
+- [x] 3.1 RED `tests/context.test.ts`: chain `/v1/models`→`/props`→config.yaml `--ctx-size` (injected fs port), all `verificado`; no source → `{kind:"unresolved"}`, never prompts.
+- [x] 3.2 GREEN `context.ts`: `resolve(model, sources, ports)`; no `ctx`/`ui` import — core stays pure.
 
 ## Phase 4: state.ts (D-002)
 - [ ] 4.1 RED `tests/state.test.ts`: `PluginState` load/save incl. owner/lastError/model labels; default owner `unknown`; lastError update path (feeds D-004).
