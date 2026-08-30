@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { provider, thinking, type ServerKind } from "../extensions/local-models/presets.ts";
+import { matchedFamily, provider, thinking, type ServerKind } from "../extensions/local-models/presets.ts";
 
 describe("provider", () => {
   const kinds: ServerKind[] = ["mtplx", "omlx", "mlx-serve", "llama-swap", "generic"];
@@ -73,5 +73,21 @@ describe("thinking", () => {
 
   it("does not overmatch a family name appearing mid-id via substring", () => {
     expect(thinking("Kwaipilot_KAT-Coder-V2.5-Dev-Q8_0", true)).toBeUndefined();
+  });
+});
+
+describe("matchedFamily (R3-015)", () => {
+  it("returns the matched prefix, distinct from the mapped thinkingFormat for glm*", () => {
+    expect(matchedFamily("glm-4.5-air")).toBe("glm");
+    expect(thinking("glm-4.5-air", true)).toBe("zai");
+  });
+
+  it("returns the same value as the format for qwen*/deepseek* where prefix == format", () => {
+    expect(matchedFamily("qwen3-4b")).toBe("qwen");
+    expect(matchedFamily("deepseek-r1")).toBe("deepseek");
+  });
+
+  it("returns undefined for an unmatched family", () => {
+    expect(matchedFamily("llama-3.1-8b")).toBeUndefined();
   });
 });

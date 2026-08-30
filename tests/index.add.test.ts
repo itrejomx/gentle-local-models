@@ -307,6 +307,61 @@ describe("add — non-interactive / cancelled fallback (D-007)", () => {
   });
 });
 
+describe("add — validates the context prompt answer (R3-016)", () => {
+  it('"" is rejected: no contextWindow 0, placeholder path, no crash', async () => {
+    const ctx = fakeCtx();
+    ctx.editor.mockResolvedValue("");
+    const ports = basePorts();
+
+    await add("localhost:11234", ctx, ports);
+
+    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
+    expect(written.providers["mlx-serve"].models[0].contextWindow).toBeUndefined();
+    const state = JSON.parse((ports.state as StatePorts & { writes: string[] }).writes.at(-1)!);
+    expect(state.servers[0].models["qwen3-4b"]).toEqual({ contextLabel: "placeholder", contextSource: "none" });
+  });
+
+  it('"abc" is rejected: placeholder path with a warning naming the rejected input', async () => {
+    const ctx = fakeCtx();
+    ctx.editor.mockResolvedValue("abc");
+    const ports = basePorts();
+
+    await add("localhost:11234", ctx, ports);
+
+    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
+    expect(written.providers["mlx-serve"].models[0].contextWindow).toBeUndefined();
+    expect(ctx.notify).toHaveBeenCalledWith(expect.stringContaining("abc"), "warning");
+    const state = JSON.parse((ports.state as StatePorts & { writes: string[] }).writes.at(-1)!);
+    expect(state.servers[0].models["qwen3-4b"]).toEqual({ contextLabel: "placeholder", contextSource: "none" });
+  });
+
+  it('"0" and negative values are rejected like cancel', async () => {
+    const ctx = fakeCtx();
+    ctx.editor.mockResolvedValue("0");
+    const ports = basePorts();
+
+    await add("localhost:11234", ctx, ports);
+
+    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
+    expect(written.providers["mlx-serve"].models[0].contextWindow).toBeUndefined();
+    const state = JSON.parse((ports.state as StatePorts & { writes: string[] }).writes.at(-1)!);
+    expect(state.servers[0].models["qwen3-4b"]).toEqual({ contextLabel: "placeholder", contextSource: "none" });
+  });
+
+  it('" 65536 " (surrounding whitespace) is trimmed and declared', async () => {
+    const ctx = fakeCtx();
+    ctx.editor.mockResolvedValue(" 65536 ");
+    const ports = basePorts();
+
+    await add("localhost:11234", ctx, ports);
+
+    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
+    expect(written.providers["mlx-serve"].models[0].contextWindow).toBe(65536);
+    const state = JSON.parse((ports.state as StatePorts & { writes: string[] }).writes.at(-1)!);
+    expect(state.servers[0].models["qwen3-4b"]).toEqual({ contextLabel: "declarado", contextSource: "prompt" });
+  });
+});
+
 describe("add — thinkingFormat proposal and override", () => {
   it("proposes the family heuristic and lets the user override it before write", async () => {
     const ctx = fakeCtx();
@@ -341,6 +396,67 @@ describe("add — thinkingFormat proposal and override", () => {
     const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
     expect(written.providers["mlx-serve"].models[0].compat).toBeUndefined();
     expect(written.providers["mlx-serve"].models[0].reasoning).toBeUndefined();
+  });
+});
+
+describe("add — reasoning becomes user-confirmed, never heuristic-derived (R3-015)", () => {
+  it("decline: written model has NO reasoning and NO thinkingFormat", async () => {
+    const ctx = fakeCtx();
+    ctx.confirm.mockResolvedValue(false);
+    ctx.editor.mockImplementation(async (title: string) => (title.includes("contextWindow") ? "32768" : undefined));
+    const ports = basePorts({ fetch: reachableFetch(["qwen2.5-coder-7b-instruct"]) });
+
+    await add("localhost:11234", ctx, ports);
+
+    expect(ctx.confirm).toHaveBeenCalledWith(
+      expect.stringContaining("reasoning"),
+      expect.stringContaining("qwen2.5-coder-7b-instruct"),
+    );
+    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
+    expect(written.providers["mlx-serve"].models[0].reasoning).toBeUndefined();
+    expect(written.providers["mlx-serve"].models[0].compat).toBeUndefined();
+  });
+
+  it("accept: written model has BOTH reasoning:true and compat.thinkingFormat", async () => {
+    const ctx = fakeCtx();
+    ctx.confirm.mockResolvedValue(true);
+    ctx.editor.mockImplementation(async (title: string) => (title.includes("contextWindow") ? "32768" : undefined));
+    const ports = basePorts({ fetch: reachableFetch(["qwen2.5-coder-7b-instruct"]) });
+
+    await add("localhost:11234", ctx, ports);
+
+    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
+    expect(written.providers["mlx-serve"].models[0].reasoning).toBe(true);
+    expect(written.providers["mlx-serve"].models[0].compat).toEqual({ thinkingFormat: "qwen" });
+  });
+
+  it("mlx-serve-style declared capabilities: reasoning true without prompting", async () => {
+    const ctx = fakeCtx();
+    ctx.editor.mockImplementation(async (title: string) => (title.includes("contextWindow") ? "32768" : undefined));
+    const ports = basePorts({
+      fetch: reachableFetch(["qwen2.5-coder-7b-instruct"]),
+      fetchVModels: vi.fn(async () => ({ "qwen2.5-coder-7b-instruct": { max_model_len: 8192, capabilities: ["reasoning"] } })),
+    });
+
+    await add("localhost:11234", ctx, ports);
+
+    expect(ctx.confirm).not.toHaveBeenCalled();
+    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
+    expect(written.providers["mlx-serve"].models[0].reasoning).toBe(true);
+    expect(written.providers["mlx-serve"].models[0].compat).toEqual({ thinkingFormat: "qwen" });
+  });
+
+  it("non-interactive (!hasUI): proposes nothing, omits both, warns naming the model", async () => {
+    const ctx = fakeCtx({ hasUI: false });
+    const ports = basePorts({ fetch: reachableFetch(["qwen3-4b"]) });
+
+    await add("localhost:11234", ctx, ports);
+
+    expect(ctx.confirm).not.toHaveBeenCalled();
+    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
+    expect(written.providers["mlx-serve"].models[0].reasoning).toBeUndefined();
+    expect(written.providers["mlx-serve"].models[0].compat).toBeUndefined();
+    expect(ctx.notify).toHaveBeenCalledWith(expect.stringContaining("qwen3-4b"), "warning");
   });
 });
 

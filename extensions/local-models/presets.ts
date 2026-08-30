@@ -51,6 +51,12 @@ const FAMILY_PREFIXES: ReadonlyArray<[prefix: string, format: ThinkingFormat]> =
  * over the heuristic, covering the per-model pre-write override requirement.
  * Never applies at the Provider level — see `CompatBlock`.
  */
+function matchFamilyPrefix(modelId: string): [prefix: string, format: ThinkingFormat] | undefined {
+  const id = modelId.toLowerCase();
+  const basename = id.slice(id.lastIndexOf("/") + 1);
+  return FAMILY_PREFIXES.find(([prefix]) => basename.startsWith(prefix));
+}
+
 export function thinking(
   modelId: string,
   reasoning: boolean,
@@ -64,8 +70,15 @@ export function thinking(
     return undefined;
   }
 
-  const id = modelId.toLowerCase();
-  const basename = id.slice(id.lastIndexOf("/") + 1);
-  const match = FAMILY_PREFIXES.find(([prefix]) => basename.startsWith(prefix));
-  return match?.[1];
+  return matchFamilyPrefix(modelId)?.[1];
+}
+
+/**
+ * Returns the matched family prefix (e.g. "qwen", "glm", "deepseek") for a
+ * model id, distinct from its mapped `thinkingFormat` (glm* maps to the
+ * "zai" format) — used by the R3-015 reasoning confirm prompt to show a
+ * human-readable family name alongside the proposed format.
+ */
+export function matchedFamily(modelId: string): string | undefined {
+  return matchFamilyPrefix(modelId)?.[0];
 }

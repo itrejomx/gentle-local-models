@@ -7,7 +7,7 @@
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { normalize, probe, type FetchLike } from "./detect.ts";
-import { provider, thinking, type ServerKind, type ThinkingFormat } from "./presets.ts";
+import { matchedFamily, provider, thinking, type ServerKind, type ThinkingFormat } from "./presets.ts";
 import { resolve as resolveContext, type ContextPorts, type PropsFields, type VModelsFields } from "./context.ts";
 import { commit, type ModelInput, type ProviderInput, type WriteOutcome, type WriterPorts } from "./models-writer.ts";
 import {
@@ -19,7 +19,7 @@ import {
   type StatePorts,
 } from "./state.ts";
 import { selectFromList } from "./ui/select-list.ts";
-import { editSetting } from "./ui/settings-list.ts";
+import { editSetting, toggleSetting } from "./ui/settings-list.ts";
 import { withLoader } from "./ui/bordered-loader.ts";
 import { promptWithPrefill } from "./ui/prompt.ts";
 import { notify } from "./ui/notify.ts";
@@ -169,6 +169,7 @@ export async function add(input: string, ctx: AddContext, ports: AddPorts): Prom
   const models: ModelInput[] = [];
   const labels: Record<string, ModelLabel> = {};
   const placeholderModels: string[] = [];
+  const reasoningUnconfirmedModels: string[] = [];
 
   for (const modelId of probeResult.models) {
     const already = existingModelIn(existingRaw, providerKey, modelId);
@@ -184,13 +185,26 @@ export async function add(input: string, ctx: AddContext, ports: AddPorts): Prom
         // both on editor cancellation AND when `!ctx.hasUI` (no dialog
         // attempted) — both cases take this SAME placeholder path.
         const answer = await promptWithPrefill(ctx, `contextWindow — ${modelId}`, "32768");
-        if (answer !== undefined) {
-          const parsed = Number(answer);
-          contextWindow = Number.isFinite(parsed) ? parsed : undefined;
+        // R3-016: validate the answer — empty, non-numeric, NaN, zero, or
+        // negative is treated EXACTLY like cancel/non-interactive (never a
+        // silent "declarado 0" or "declarado NaN"), plus a notify naming the
+        // rejected input so the user knows why it was rejected.
+        const trimmed = answer?.trim();
+        const parsed = trimmed ? Number(trimmed) : NaN;
+        const isValidPositive = trimmed !== undefined && trimmed !== "" && Number.isFinite(parsed) && parsed > 0;
+        if (isValidPositive) {
+          contextWindow = parsed;
           labels[modelId] = { contextLabel: "declarado" as ContextLabel, contextSource: "prompt" };
         } else {
           placeholderModels.push(modelId);
           labels[modelId] = { contextLabel: "placeholder" as ContextLabel, contextSource: "none" };
+          if (answer !== undefined) {
+            notify(
+              ctx.ui,
+              `contextWindow answer "${answer}" for ${modelId} is not a valid positive integer — using placeholder instead.`,
+              "warning",
+            );
+          }
         }
       }
     }
@@ -198,21 +212,61 @@ export async function add(input: string, ctx: AddContext, ports: AddPorts): Prom
     // never write a new label; `labels` simply has no entry for this model,
     // and the merge below preserves whatever label already lived in state.
 
+    // R3-015: reasoning is user-confirmed, never heuristic-derived.
+    // (a) Server-declared capability (e.g. mlx-serve's /v1/models
+    //     "capabilities") ⇒ reasoning is verified, not proposed — no confirm.
+    // (b) family-matched but undeclared ⇒ ONE confirm step sets BOTH
+    //     reasoning and thinkingFormat together; decline sets NEITHER.
+    // (c) no family match ⇒ nothing proposed, as today.
+    const declaredReasoning = vModels[modelId]?.capabilities?.includes("reasoning") === true;
     const heuristic = thinking(modelId, true);
-    let thinkingFormat: ThinkingFormat | undefined = heuristic;
-    if (heuristic !== undefined && ctx.hasUI) {
-      const edited = await editSetting(ctx.ui, `thinkingFormat — ${modelId}`, heuristic);
-      if (edited !== undefined && edited !== "") {
-        thinkingFormat = edited as ThinkingFormat;
+    let reasoning: boolean | undefined;
+    let thinkingFormat: ThinkingFormat | undefined;
+
+    if (declaredReasoning) {
+      reasoning = true;
+      thinkingFormat = heuristic;
+      if (heuristic !== undefined && ctx.hasUI) {
+        const edited = await editSetting(ctx.ui, `thinkingFormat — ${modelId}`, heuristic);
+        if (edited !== undefined && edited !== "") {
+          thinkingFormat = edited as ThinkingFormat;
+        }
+      }
+    } else if (heuristic !== undefined) {
+      if (ctx.hasUI) {
+        const family = matchedFamily(modelId) ?? heuristic;
+        const accepted = await toggleSetting(
+          ctx.ui,
+          `reasoning — ${modelId}`,
+          `Model ${modelId} looks like a ${family} reasoning model. Mark reasoning + thinkingFormat ${heuristic}?`,
+        );
+        if (accepted) {
+          reasoning = true;
+          thinkingFormat = heuristic;
+          const edited = await editSetting(ctx.ui, `thinkingFormat — ${modelId}`, heuristic);
+          if (edited !== undefined && edited !== "") {
+            thinkingFormat = edited as ThinkingFormat;
+          }
+        }
+      } else {
+        reasoningUnconfirmedModels.push(modelId);
       }
     }
 
     models.push({
       id: modelId,
       contextWindow,
-      reasoning: heuristic !== undefined ? true : undefined,
+      reasoning,
       compat: thinkingFormat !== undefined ? { thinkingFormat } : undefined,
     });
+  }
+
+  if (reasoningUnconfirmedModels.length > 0) {
+    notify(
+      ctx.ui,
+      `reasoning/thinkingFormat not confirmed (non-interactive) for: ${reasoningUnconfirmedModels.join(", ")} — confirm manually if needed.`,
+      "warning",
+    );
   }
 
   const providerInput: ProviderInput = {
