@@ -260,6 +260,27 @@ export function mergeProvider(existingRaw: unknown, providerKey: string, input: 
   return file;
 }
 
+/**
+ * Removes exactly the given model ids from one Provider's `models` array —
+ * `mergeProvider`'s inverse for explicit prune (R2): REMOVES only the
+ * confirmed Unserved Models, never touches any other model or any
+ * Provider-level field. Operates on the raw parsed JSON, like
+ * `mergeProvider`. Never mutates `existingRaw`.
+ */
+export function removeModels(existingRaw: unknown, providerKey: string, modelIds: string[]): Json {
+  const file = asObject(existingRaw);
+  const providers = asObject(file.providers);
+  const provider = asObject(providers[providerKey]);
+  const toRemove = new Set(modelIds);
+
+  provider.models = asArray(provider.models)
+    .map((m) => asObject(m))
+    .filter((m) => !toRemove.has(m.id as string));
+  providers[providerKey] = provider;
+  file.providers = providers;
+  return file;
+}
+
 const ModelCompatSchema = Type.Object({
   // Permissive on purpose (D2): Pi's real thinkingFormat is an 11-value
   // literal union, but this mirror only needs to structurally validate the
@@ -302,6 +323,45 @@ const ModelsFileSchema = Type.Object({
 });
 
 const validator = Compile(ModelsFileSchema);
+
+export interface ProviderEntry {
+  providerKey: string;
+  baseUrl?: string;
+  models: Array<{ id: string }>;
+}
+
+/**
+ * Read-only Provider enumeration for `list`/`prune` (Phase 8) — the single
+ * place that parses `models.json` for reading, so neither shell command
+ * hand-rolls its own JSON.parse. Degrades to an empty list on a missing
+ * file, invalid JSON, or a comment-containing file, mirroring `state.ts`'s
+ * `load()` no-throw convention: reading for DISPLAY never fails loudly, only
+ * `commit()`'s WRITE path enforces the comment guard.
+ */
+export function listProviders(raw: string | undefined): ProviderEntry[] {
+  if (raw === undefined || hasComments(raw)) {
+    return [];
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return [];
+  }
+  const providers = asObject(asObject(parsed).providers);
+  return Object.entries(providers).map(([providerKey, providerRaw]) => {
+    const provider = asObject(providerRaw);
+    const models = asArray(provider.models)
+      .map((m) => asObject(m))
+      .filter((m): m is Json & { id: string } => typeof m.id === "string")
+      .map((m) => ({ id: m.id }));
+    return {
+      providerKey,
+      baseUrl: typeof provider.baseUrl === "string" ? provider.baseUrl : undefined,
+      models,
+    };
+  });
+}
 
 /** Pre-write validation (R2) against the mirrored schema. File-shape only — see module header for scope. */
 export function validate(file: unknown): { ok: true } | { ok: false; errors: string[] } {
@@ -531,6 +591,91 @@ export async function commit(
 
   if (!verification.ok) {
     return recoverFromFailedWrite(ports, path, providerKey, modelIds, verification.error, backupPath);
+  }
+
+  return { kind: "written", backup: backupPath, lint: lintWarnings };
+}
+
+export interface PruneRemoval {
+  providerKey: string;
+  modelIds: string[];
+}
+
+/**
+ * Removes the confirmed Unserved Models for one or more Providers through
+ * the same guarded orchestration as `commit()` (D-001): read → comment guard
+ * → remove (never touches any other field or model) → mirror validate →
+ * backup rotate → write → verify → restore on failure. `removals` may span
+ * multiple Providers so a single prune run still produces exactly ONE
+ * backup and ONE write (spec R2: "one confirmation... a backup is written
+ * before any change"). `verifyWritten` is called with an empty providerKey
+ * and empty modelIds — the generic "did the file still load" check the spec
+ * requires for every write (R2's read-back requirement), not add()'s
+ * stronger per-model-presence check: proving specific models are now ABSENT
+ * would hold just as well on a totally broken read, so it proves nothing
+ * extra here.
+ */
+export async function commitPrune(ports: WriterPorts, path: string, removals: PruneRemoval[]): Promise<WriteOutcome> {
+  let raw: string | undefined;
+  try {
+    raw = await ports.readFile(path);
+  } catch (error) {
+    return { kind: "write-failed", stage: "read", error: errorMessage(error), fileState: "untouched" };
+  }
+
+  if (raw === undefined) {
+    return { kind: "written", lint: [] };
+  }
+
+  if (hasComments(raw)) {
+    return { kind: "refused", reason: "comments" };
+  }
+
+  let existing: unknown;
+  try {
+    existing = JSON.parse(raw);
+  } catch (error) {
+    return {
+      kind: "invalid",
+      errors: [`existing models.json is not valid JSON: ${errorMessage(error)}`],
+      backups: await listBackupsSafely(ports, path),
+    };
+  }
+
+  let merged = asObject(existing);
+  for (const removal of removals) {
+    merged = removeModels(merged, removal.providerKey, removal.modelIds);
+  }
+
+  const validation = validate(merged);
+  if (!validation.ok) {
+    return { kind: "invalid", errors: validation.errors, backups: await listBackupsSafely(ports, path) };
+  }
+
+  const lintWarnings = lint(merged);
+
+  let backupPath: string | undefined;
+  try {
+    backupPath = await rotateBackups(ports, path, raw);
+  } catch (error) {
+    return { kind: "write-failed", stage: "rotate-backups", error: errorMessage(error), fileState: "untouched" };
+  }
+
+  try {
+    await ports.writeFile(path, JSON.stringify(merged, null, 2));
+  } catch (error) {
+    return recoverFromFailedWrite(ports, path, "", [], `main write failed: ${errorMessage(error)}`, backupPath);
+  }
+
+  let verification: { ok: true } | { ok: false; error: string };
+  try {
+    verification = await ports.verifyWritten("", []);
+  } catch (error) {
+    verification = { ok: false, error: `verifyWritten threw: ${errorMessage(error)}` };
+  }
+
+  if (!verification.ok) {
+    return recoverFromFailedWrite(ports, path, "", [], verification.error, backupPath);
   }
 
   return { kind: "written", backup: backupPath, lint: lintWarnings };

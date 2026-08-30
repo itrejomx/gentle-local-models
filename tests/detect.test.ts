@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { normalize, probe, probeAll, type FetchLike } from "../extensions/local-models/detect.ts";
+import { isLocalHost, normalize, probe, probeAll, type FetchLike } from "../extensions/local-models/detect.ts";
 
 describe("normalize", () => {
   it("normalizes a bare host:port to a base URL ending in /v1", () => {
@@ -112,6 +112,24 @@ describe("probe", () => {
 
     expect(result.status).toBe("unreachable");
     expect(elapsed).toBeLessThan(300);
+  });
+});
+
+describe("isLocalHost", () => {
+  it("treats localhost, 127.0.0.1, 0.0.0.0, and ::1 as local (Phase 8, prune's 'any local Provider' test)", () => {
+    expect(isLocalHost("http://localhost:11234/v1")).toBe(true);
+    expect(isLocalHost("http://127.0.0.1:1234/v1")).toBe(true);
+    expect(isLocalHost("http://0.0.0.0:8080/v1")).toBe(true);
+    expect(isLocalHost("http://[::1]:8080/v1")).toBe(true);
+  });
+
+  it("treats a LAN or remote hostname as NOT local (design.md Open Questions: acceptable for v0.1)", () => {
+    expect(isLocalHost("http://192.168.1.50:8080/v1")).toBe(false);
+    expect(isLocalHost("https://models.example.com/v1")).toBe(false);
+  });
+
+  it("treats an unparsable baseUrl as NOT local rather than throwing", () => {
+    expect(isLocalHost("not a url")).toBe(false);
   });
 });
 

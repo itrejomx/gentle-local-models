@@ -87,6 +87,23 @@ export async function probe(
   }
 }
 
+const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1", "0.0.0.0", "[::1]", "::1"]);
+
+/**
+ * True when `baseUrl`'s hostname is a loopback/local-machine address
+ * (localhost, 127.0.0.1, 0.0.0.0, ::1). Used by `prune` (Phase 8, D4) to
+ * scope "any local Provider" — a LAN or remote hostname is NOT local by this
+ * test (design.md's Open Questions: host-based, acceptable for v0.1, revisit
+ * in v0.2). An unparsable `baseUrl` resolves to `false` rather than throwing.
+ */
+export function isLocalHost(baseUrl: string): boolean {
+  try {
+    return LOCAL_HOSTNAMES.has(new URL(baseUrl).hostname);
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Probes every given base URL independently. Callers (the shell, Phase 8)
  * decide WHICH base URLs to pass in — this stays a pure primitive with no

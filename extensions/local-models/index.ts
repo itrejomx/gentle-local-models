@@ -6,15 +6,27 @@
 // imports Pi's runtime — only its types, which jiti erases (D1, D8).
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { normalize, probe, type FetchLike } from "./detect.ts";
+import { isLocalHost, normalize, probe, probeAll, type FetchLike } from "./detect.ts";
 import { matchedFamily, provider, thinking, type ServerKind, type ThinkingFormat } from "./presets.ts";
 import { resolve as resolveContext, type ContextPorts, type PropsFields, type VModelsFields } from "./context.ts";
-import { commit, type ModelInput, type ProviderInput, type WriteOutcome, type WriterPorts } from "./models-writer.ts";
+import {
+  commit,
+  commitPrune,
+  listProviders,
+  type ModelInput,
+  type ProviderInput,
+  type PruneRemoval,
+  type WriteOutcome,
+  type WriterPorts,
+} from "./models-writer.ts";
 import {
   load as loadState,
+  ownerOf,
   save as saveState,
+  withLastError,
   type ContextLabel,
   type ModelLabel,
+  type Owner,
   type ServerRecord,
   type StatePorts,
 } from "./state.ts";
@@ -348,6 +360,175 @@ export async function add(input: string, ctx: AddContext, ports: AddPorts): Prom
   }
 }
 
+export interface ListContext {
+  ui: {
+    notify(message: string, type?: "info" | "warning" | "error"): void;
+    setWorkingMessage(message?: string): void;
+    setWorkingVisible(visible: boolean): void;
+  };
+}
+
+export interface ListPorts {
+  fetch: FetchLike;
+  writer: { path: string; ports: Pick<WriterPorts, "readFile"> };
+  state: StatePorts;
+}
+
+interface KnownServer {
+  providerKey: string;
+  baseUrl: string;
+  owner: Owner;
+}
+
+/**
+ * `/local-models list` (Phase 8, R1, D-004). Known base URLs are the union of
+ * models.json Providers and plugin-state Servers, deduped by baseUrl; each
+ * is probed with `detect.probeAll` (1s timeout). A Server the plugin already
+ * tracks in state gets its `lastError` updated — set on failure, cleared on
+ * success — so `prune`/a future Check can read a fresh signal (D-004).
+ */
+export async function list(ctx: ListContext, ports: ListPorts): Promise<void> {
+  const raw = await ports.writer.ports.readFile(ports.writer.path);
+  const state = await loadState(ports.state);
+
+  const known = new Map<string, KnownServer>();
+  for (const entry of listProviders(raw)) {
+    if (entry.baseUrl !== undefined) {
+      known.set(entry.baseUrl, { providerKey: entry.providerKey, baseUrl: entry.baseUrl, owner: ownerOf(state, entry.providerKey) });
+    }
+  }
+  for (const server of state.servers) {
+    if (!known.has(server.baseUrl)) {
+      known.set(server.baseUrl, { providerKey: server.providerKey, baseUrl: server.baseUrl, owner: server.owner });
+    }
+  }
+
+  const entries = [...known.values()];
+  if (entries.length === 0) {
+    notify(ctx.ui, "No Servers registered yet. Use /local-models add <baseUrl> to register one.", "info");
+    return;
+  }
+
+  const probeResults = await withLoader(ctx.ui, `Probing ${entries.length} Server${entries.length === 1 ? "" : "s"}…`, () =>
+    probeAll(ports.fetch, entries.map((entry) => entry.baseUrl)),
+  );
+
+  let nextState = state;
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i];
+    const probeResult = probeResults[i];
+    const hasServerRecord = state.servers.some((server) => server.providerKey === entry.providerKey);
+
+    if (probeResult.status === "reachable") {
+      notify(ctx.ui, `${entry.providerKey} (${entry.owner}) — ${entry.baseUrl} — reachable, ${probeResult.models.length} model(s)`, "info");
+      if (hasServerRecord) {
+        nextState = withLastError(nextState, entry.providerKey, undefined);
+      }
+    } else {
+      notify(ctx.ui, `${entry.providerKey} (${entry.owner}) — ${entry.baseUrl} — not detected: ${probeResult.error}`, "warning");
+      if (hasServerRecord) {
+        nextState = withLastError(nextState, entry.providerKey, probeResult.error);
+      }
+    }
+  }
+
+  if (nextState !== state) {
+    await saveState(ports.state, nextState);
+  }
+}
+
+export interface PruneContext {
+  hasUI: boolean;
+  ui: {
+    confirm(title: string, message: string): Promise<boolean>;
+    notify(message: string, type?: "info" | "warning" | "error"): void;
+    setWorkingMessage(message?: string): void;
+    setWorkingVisible(visible: boolean): void;
+  };
+}
+
+export interface PrunePorts {
+  fetch: FetchLike;
+  writer: { path: string; ports: WriterPorts };
+  state: StatePorts;
+}
+
+interface PruneCandidate {
+  providerKey: string;
+  owner: Owner;
+  unserved: string[];
+}
+
+/**
+ * `/local-models prune` (Phase 8, R2, D-004). Scans EVERY local Provider in
+ * models.json (loopback/private-host `baseUrl`, per `detect.isLocalHost`) —
+ * including ones the plugin never wrote — shows each candidate's ownership,
+ * and identifies Unserved Models by comparing a Provider's registered
+ * models against a live `probeAll` result. Exactly ONE confirmation covers
+ * the whole run; the actual removal goes through `models-writer.commitPrune`
+ * (same backup-then-write guarantee as `add`'s `commit()`).
+ */
+export async function prune(ctx: PruneContext, ports: PrunePorts): Promise<void> {
+  const raw = await ports.writer.ports.readFile(ports.writer.path);
+  const state = await loadState(ports.state);
+
+  const localProviders = listProviders(raw).filter((entry) => entry.baseUrl !== undefined && isLocalHost(entry.baseUrl));
+  if (localProviders.length === 0) {
+    notify(ctx.ui, "No local Providers found in models.json.", "info");
+    return;
+  }
+
+  const probeResults = await withLoader(
+    ctx.ui,
+    `Checking ${localProviders.length} local Provider${localProviders.length === 1 ? "" : "s"}…`,
+    () => probeAll(ports.fetch, localProviders.map((entry) => entry.baseUrl as string)),
+  );
+
+  const candidates: PruneCandidate[] = [];
+  for (let i = 0; i < localProviders.length; i++) {
+    const providerEntry = localProviders[i];
+    const probeResult = probeResults[i];
+    const liveModelIds = new Set(probeResult.status === "reachable" ? probeResult.models : []);
+    const unserved = providerEntry.models.map((model) => model.id).filter((id) => !liveModelIds.has(id));
+    if (unserved.length > 0) {
+      candidates.push({ providerKey: providerEntry.providerKey, owner: ownerOf(state, providerEntry.providerKey), unserved });
+    }
+  }
+
+  if (candidates.length === 0) {
+    notify(ctx.ui, "No Unserved Models found to prune.", "info");
+    return;
+  }
+
+  const summary = candidates.map((c) => `${c.providerKey} (${c.owner}): ${c.unserved.join(", ")}`).join("\n");
+
+  if (!ctx.hasUI) {
+    notify(ctx.ui, `Found Unserved Models but cannot confirm non-interactively — re-run interactively to prune:\n${summary}`, "warning");
+    return;
+  }
+
+  const confirmed = await ctx.ui.confirm("Prune Unserved Models", `Remove the following Unserved Models?\n${summary}`);
+  if (!confirmed) {
+    notify(ctx.ui, "Prune cancelled.", "info");
+    return;
+  }
+
+  const removals: PruneRemoval[] = candidates.map((c) => ({ providerKey: c.providerKey, modelIds: c.unserved }));
+  const outcome = await withLoader(ctx.ui, `Writing ${ports.writer.path}…`, () => commitPrune(ports.writer.ports, ports.writer.path, removals));
+
+  if (outcome.kind !== "written") {
+    const { message, type } = renderOutcome(outcome, ports.writer.path);
+    notify(ctx.ui, message, type);
+    return;
+  }
+
+  const prunedCount = removals.reduce((total, r) => total + r.modelIds.length, 0);
+  notify(ctx.ui, `Pruned ${prunedCount} Unserved Model${prunedCount === 1 ? "" : "s"} from ${removals.length} Provider${removals.length === 1 ? "" : "s"}.`, "info");
+  if (outcome.lint.length > 0) {
+    notify(ctx.ui, `models.json lint warnings: ${outcome.lint.join("; ")}`, "warning");
+  }
+}
+
 async function realVerifyWritten(
   ctx: ExtensionCommandContext,
   providerKey: string,
@@ -398,8 +579,18 @@ export default function localModelsExtension(pi: ExtensionAPI): void {
         return;
       }
 
+      if (subcommand === "list") {
+        await list(ctx, buildAddPorts(ctx));
+        return;
+      }
+
+      if (subcommand === "prune") {
+        await prune(ctx, buildAddPorts(ctx));
+        return;
+      }
+
       ctx.ui.notify(
-        `"${subcommand ?? ""}" is not available yet — only "add" is implemented so far. Usage: /local-models add <baseUrl>`,
+        `"${subcommand ?? ""}" is not available — usage: /local-models add <baseUrl> | list | prune`,
         "warning",
       );
     },
