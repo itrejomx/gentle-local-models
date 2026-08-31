@@ -94,10 +94,17 @@ const OWNED_BY_KIND: Readonly<Record<string, ServerKind>> = {
   omlx: "omlx",
 };
 
-/** Maps a probed Server's `owned_by` value to the ServerKind `add` preselects. */
+/**
+ * Maps a probed Server's `owned_by` value to the ServerKind `add` preselects.
+ * `Object.hasOwn` guards the lookup (R1-008) so a Server declaring
+ * `owned_by: "constructor"` (or `"__proto__"`, `"toString"`, ...) can never
+ * resolve to an inherited `Object.prototype` property instead of a genuine
+ * table entry — those all correctly fall back to "generic", same as any
+ * other unrecognized value.
+ */
 export function kindFromOwnedBy(ownedBy: string | undefined): ServerKind {
-  if (ownedBy === undefined) {
+  if (ownedBy === undefined || !Object.hasOwn(OWNED_BY_KIND, ownedBy)) {
     return "generic";
   }
-  return OWNED_BY_KIND[ownedBy] ?? "generic";
+  return OWNED_BY_KIND[ownedBy];
 }

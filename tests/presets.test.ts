@@ -100,6 +100,12 @@ describe("kindFromOwnedBy — Server-kind auto-detect from /v1/models owned_by (
   it("falls back to generic when owned_by is absent", () => {
     expect(kindFromOwnedBy(undefined)).toBe("generic");
   });
+
+  it("falls back to generic for prototype-polluting owned_by values instead of returning an inherited property (R1-008)", () => {
+    expect(kindFromOwnedBy("constructor")).toBe("generic");
+    expect(kindFromOwnedBy("__proto__")).toBe("generic");
+    expect(kindFromOwnedBy("toString")).toBe("generic");
+  });
 });
 
 describe("matchedFamily (R3-015)", () => {
