@@ -38,12 +38,53 @@ type Json = Record<string, unknown>;
 // context.ts + the shell's interactive prompt, not to this writer.
 const DEFAULT_MAX_TOKENS = 4096;
 
-const KNOWN_PROVIDER_COMPAT_KEYS = new Set<string>([
+// Every key Pi's real compat schema accepts, verified against the installed
+// @earendil-works/pi-coding-agent@0.84.4's
+// `dist/core/model-config.d.ts` (`ProviderConfigSchema.compat` and
+// `ModelDefinitionSchema.compat`, plus the identical per-model `compat`
+// nested inside `ProviderConfigSchema.models[]` and `ModelOverrideSchema`).
+// `compat` there is a 3-member TypeBox union whose member objects overlap on
+// several keys; this is the flattened set of every key across all three
+// members. Pi's union is byte-identical at the Provider level and the Model
+// level (both schemas declare the exact same 3-member union), so ONE shared
+// set is used for both — a lint-only false positive (a legitimate
+// Provider-level `thinkingFormat`, or a legitimate Model-level
+// `supportsDeveloperRole`, etc.) can never happen at either level. v0.2
+// should re-diff this list against whatever Pi version is installed then,
+// since Pi does not publish this union as a named export.
+const KNOWN_COMPAT_KEYS = new Set<string>([
+  "supportsStore",
   "supportsDeveloperRole",
   "supportsReasoningEffort",
+  "supportsUsageInStreaming",
+  "supportsFinishReason",
   "maxTokensField",
+  "requiresToolResultName",
+  "requiresAssistantAfterToolResult",
+  "requiresThinkingAsText",
+  "requiresReasoningContentOnAssistantMessages",
+  "thinkingFormat",
+  "chatTemplateKwargs",
+  "chatTemplateArgs",
+  "cacheControlFormat",
+  "openRouterRouting",
+  "vercelGatewayRouting",
+  "supportsOpenAIGrammarTools",
+  "supportsStrictMode",
+  "sendSessionAffinityHeaders",
+  "deferredToolsMode",
+  "sessionAffinityFormat",
+  "supportsLongCacheRetention",
+  "supportsAdditionalTools",
+  "supportsToolSearch",
+  "supportsEagerToolInputStreaming",
+  "supportsCacheControlOnTools",
+  "supportsTemperature",
+  "forceAdaptiveThinking",
+  "allowEmptySignature",
+  "supportsStrictTools",
+  "supportsToolReferences",
 ]);
-const KNOWN_MODEL_COMPAT_KEYS = new Set<string>(["thinkingFormat"]);
 
 export interface ModelInput {
   id: string;
@@ -476,11 +517,11 @@ export function lint(fileRaw: unknown): string[] {
 
   for (const [providerKey, providerRaw] of Object.entries(providers)) {
     const provider = asObject(providerRaw);
-    warnUnknownKeys(provider.compat, KNOWN_PROVIDER_COMPAT_KEYS, `Provider "${providerKey}"`, warnings);
+    warnUnknownKeys(provider.compat, KNOWN_COMPAT_KEYS, `Provider "${providerKey}"`, warnings);
 
     for (const modelRaw of asArray(provider.models)) {
       const model = asObject(modelRaw);
-      warnUnknownKeys(model.compat, KNOWN_MODEL_COMPAT_KEYS, `Model "${model.id}" (${providerKey})`, warnings);
+      warnUnknownKeys(model.compat, KNOWN_COMPAT_KEYS, `Model "${model.id}" (${providerKey})`, warnings);
     }
   }
 
