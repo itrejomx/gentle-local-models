@@ -9,11 +9,11 @@
 | Chained PRs recommended | Yes |
 | Suggested split | PR1 → PR10 (Work Units below) |
 | Delivery strategy | auto-chain |
-| Chain strategy | pending |
+| Chain strategy | stacked-to-main |
 
-Decision needed before apply: Yes
+Decision needed before apply: No — resolved by orchestrator (stacked-to-main)
 Chained PRs recommended: Yes
-Chain strategy: pending
+Chain strategy: stacked-to-main
 400-line budget risk: High
 
 Greenfield package + 5 pure core modules + shell + UI wrappers, each with paired RED/GREEN vitest files, exceeds 400 authored lines quickly. Chain strategy (stacked-to-main vs feature-branch-chain) is not yet chosen — orchestrator must collect it from the user before PR1's base branch is created; each unit below stays ≤~350 changed lines under either strategy.
@@ -36,11 +36,11 @@ Greenfield package + 5 pure core modules + shell + UI wrappers, each with paired
 `stacked-to-main`: PR1..PR10 merge to main in order. `feature-branch-chain`: draft tracker `feature/v0.1-registrar`; PR1 targets tracker, PRn targets PR(n-1)'s branch; only tracker merges to main.
 
 ## Phase 0: Bootstrap (D8)
-- [ ] 0.1 `git init`; `.gitignore` (node_modules/, .pi/, outputs/); commit existing docs.
-- [ ] 0.2 `package.json`: `pi.extensions: ["./extensions"]`, `scripts.test: "npx vitest run"`.
-- [ ] 0.3 `npm i -D vitest typebox@1.3.7 @earendil-works/pi-coding-agent`; add `tsconfig.json`, `vitest.config.ts`.
-- [ ] 0.4 RED `tests/smoke.test.ts` deliberately failing; `npx vitest run` → fail.
-- [ ] 0.5 GREEN fix assertion; `npx vitest run` → pass. Gate established.
+- [x] 0.1 `git init`; `.gitignore` (node_modules/, .pi/, outputs/); commit existing docs.
+- [x] 0.2 `package.json`: `pi.extensions: ["./extensions"]`, `scripts.test: "npx vitest run"`.
+- [x] 0.3 `npm i -D vitest typebox@1.3.7 @earendil-works/pi-coding-agent`; add `tsconfig.json`, `vitest.config.ts`. (Deviation: `@earendil-works/pi-coding-agent` deferred — not needed until Phase 7 `index.ts` imports Pi types; see apply-progress.)
+- [x] 0.4 RED `tests/smoke.test.ts` deliberately failing; `npx vitest run` → fail.
+- [x] 0.5 GREEN fix assertion; `npx vitest run` → pass. Gate established.
 
 ## Phase 1: detect.ts (R1)
 - [ ] 1.1 RED `tests/detect.test.ts`: host:port/`/v1`/`/v1/` normalize equal; probe ≤1s; 200+empty-models = failure; unreachable → last error.
