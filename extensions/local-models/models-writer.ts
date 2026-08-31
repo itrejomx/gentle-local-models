@@ -238,16 +238,26 @@ function createModel(input: ModelInput): Json {
 export function mergeProvider(existingRaw: unknown, providerKey: string, input: ProviderInput): Json {
   const file = asObject(existingRaw);
   const providers = asObject(file.providers);
-  const providerIsNew = providers[providerKey] === undefined;
   const provider = asObject(providers[providerKey]);
 
-  // v0.1.1 hotfix item 1: Pi's provider composer requires `api` at the
-  // Provider or Model level to resolve requests (live E2E: "no \"api\"
-  // specified"). Only set it on a brand NEW Provider — fill-never-overwrite
-  // must never touch an existing Provider's `api`, even one that happens to
-  // be missing it (e.g. a pre-v0.1.1 write, or a hand-curated Provider that
-  // sets `api` per-model instead).
-  if (providerIsNew && provider.api === undefined) {
+  // v0.1.1 hotfix item 1, extended by the PR11 rider batch: Pi's provider
+  // composer requires `api` at the Provider or Model level to resolve
+  // requests (live E2E: "no \"api\" specified"). Fill it whenever the
+  // Provider-level `api` is absent — NEW or EXISTING alike — never only when
+  // the models each already declare their own `api` (fill-never-overwrite's
+  // own contract only cares whether the field is absent, not whether some
+  // other field would have made it unnecessary). An EXISTING Provider that
+  // already carries `api` (any value) is left byte-for-byte untouched, per
+  // fill-never-overwrite (R2).
+  //
+  // Rationale for filling an EXISTING api-less Provider too: a pre-v0.1.1
+  // write (or a hand-curated Provider that happens to omit `api`) leaves
+  // Pi's registry reporting a composition error on every load, so every
+  // subsequent plugin write against that same Provider key would end in a
+  // confusing restore (verifyWritten fails because the whole registry never
+  // composed). Filling the missing field is exactly this merge's own "fill"
+  // case (R2) and self-heals that Provider the next time it is written.
+  if (provider.api === undefined) {
     provider.api = "openai-completions";
   }
 
@@ -400,19 +410,24 @@ export function listProviders(raw: string | undefined): ProviderEntry[] {
  * Pre-write validation (R2) against the mirrored schema. File-shape only —
  * see module header for scope.
  *
- * `strictNewProviderKeys` (v0.1.1 hotfix item 1) adds one extra, targeted
- * check on top of the permissive structural mirror: for each listed
- * Provider key — the ones THIS write is creating brand new — every one of
- * its models must resolve an `api` (Provider-level `api`, or that specific
- * model's own `api`), matching Pi's real provider composer requirement. A
- * Provider NOT listed here (an existing/hand-curated Provider this write
- * only re-merges into) is never held to this check, even if it lacks `api`
- * entirely — the mirror stays exactly as permissive as before for everyone
- * else.
+ * `strictProviderKeys` (v0.1.1 hotfix item 1, extended by the PR11 rider
+ * batch) adds one extra, targeted check on top of the permissive structural
+ * mirror: for each listed Provider key — the one THIS write is committing,
+ * new or existing — every one of its models must resolve an `api`
+ * (Provider-level `api`, or that specific model's own `api`). This is
+ * exactly Pi's real provider-composer requirement (`api` at the Provider
+ * level OR on every model, `core/provider-composer.js:48-52`), applied on
+ * every commit rather than only for brand-new Providers, since
+ * `mergeProvider`'s own fill (above) already guarantees this for any
+ * Provider it can reach — this check is a targeted backstop, not a
+ * behavior-changing gate, for whichever Provider key this write touches. A
+ * Provider NOT listed here (untouched by this write) is never held to this
+ * check, even if it lacks `api` entirely — the mirror stays exactly as
+ * permissive as before for everyone else.
  */
 export function validate(
   file: unknown,
-  strictNewProviderKeys: string[] = [],
+  strictProviderKeys: string[] = [],
 ): { ok: true } | { ok: false; errors: string[] } {
   if (!validator.Check(file)) {
     const errors = [...validator.Errors(file)].map((error) => `${error.instancePath || "root"}: ${error.message}`);
@@ -421,7 +436,7 @@ export function validate(
 
   const providers = asObject(asObject(file).providers);
   const errors: string[] = [];
-  for (const providerKey of strictNewProviderKeys) {
+  for (const providerKey of strictProviderKeys) {
     const provider = asObject(providers[providerKey]);
     const providerHasApi = typeof provider.api === "string" && provider.api.length > 0;
     const models = asArray(provider.models).map((m) => asObject(m));
@@ -616,14 +631,12 @@ export async function commit(
     }
   }
 
-  // v0.1.1 hotfix item 1: capture whether this write is CREATING `providerKey`
-  // brand new, before mergeProvider folds it into `existing` — this is
-  // exactly the case validate()'s strict api check must cover, and exactly
-  // the case mergeProvider itself fills `api` for.
-  const providerIsNew = asObject(asObject(existing).providers)[providerKey] === undefined;
   const merged = mergeProvider(existing, providerKey, input);
 
-  const validation = validate(merged, providerIsNew ? [providerKey] : []);
+  // PR11 rider batch item 1: the strict api requirement is checked for the
+  // target `providerKey` on every commit — new or existing — not only when
+  // this write is creating it brand new. See validate()'s JSDoc.
+  const validation = validate(merged, [providerKey]);
   if (!validation.ok) {
     return { kind: "invalid", errors: validation.errors, backups: await listBackupsSafely(ports, path) };
   }

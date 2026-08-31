@@ -132,7 +132,7 @@ describe("mergeProvider — fill-never-overwrite (R2)", () => {
     expect(merged.providers["mlx-serve-local"].api).toBe("openai-completions");
   });
 
-  it("never adds api to an existing Provider that is missing it (fill-never-overwrite: never touch an existing Provider's api)", () => {
+  it("fills api on an existing Provider that is missing it too — self-heals a pre-v0.1.1 write (rider batch item 1)", () => {
     const existing = {
       providers: {
         "mlx-serve-local": {
@@ -147,7 +147,7 @@ describe("mergeProvider — fill-never-overwrite (R2)", () => {
       providers: { "mlx-serve-local": { api?: string } };
     };
 
-    expect(merged.providers["mlx-serve-local"].api).toBeUndefined();
+    expect(merged.providers["mlx-serve-local"].api).toBe("openai-completions");
   });
 
   it("never overwrites an existing Provider's explicit api with the default", () => {
@@ -545,7 +545,7 @@ describe("commit — full orchestration against stubbed WriterPorts (R2)", () =>
     expect(written.providers["mlx-serve-local"].api).toBe("openai-completions");
   });
 
-  it("byte-preserves a re-added existing Provider that has no api, and never requires one for it (v0.1.1 hotfix item 1)", async () => {
+  it("fills api on a re-added EXISTING api-less Provider, while every model stays byte-identical (rider batch item 1)", async () => {
     const existing = realisticLmstudioFile();
     const ports = memoryPorts({ [path]: JSON.stringify(existing) });
 
@@ -555,10 +555,25 @@ describe("commit — full orchestration against stubbed WriterPorts (R2)", () =>
 
     expect(outcome.kind).toBe("written");
     const written = JSON.parse(ports.files[path]);
-    expect(written.providers.lmstudio.api).toBeUndefined();
+    expect(written.providers.lmstudio.api).toBe("openai-completions");
     for (const original of (existing.providers.lmstudio as { models: unknown[] }).models) {
       expect(written.providers.lmstudio.models).toContainEqual(original);
     }
+  });
+
+  it("byte-preserves an existing Provider's api instead of overwriting it, when re-added via commit()", async () => {
+    const existing = {
+      providers: {
+        lmstudio: { baseUrl: "http://localhost:1234/v1", api: "anthropic-messages", models: [] },
+      },
+    };
+    const ports = memoryPorts({ [path]: JSON.stringify(existing) });
+
+    const outcome = await commit(ports, path, "lmstudio", { baseUrl: "http://localhost:1234/v1", models: [] });
+
+    expect(outcome.kind).toBe("written");
+    const written = JSON.parse(ports.files[path]);
+    expect(written.providers.lmstudio.api).toBe("anthropic-messages");
   });
 
   it("auto-restores the newest backup when verifyWritten reports an empty Provider map, naming the backup restored from", async () => {

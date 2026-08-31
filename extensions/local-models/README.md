@@ -94,6 +94,18 @@ registration (fill-never-overwrite will never touch it again once set). A
 v0.2 refinement is planned to reintroduce a per-model override, most likely
 via a targeted re-add of a single model.
 
+### A Provider missing `api` gets it filled, new or existing (v0.1.1)
+
+Pi's provider composer requires `api` (e.g. `"openai-completions"`) at the
+Provider level or on every one of its models to resolve requests; a Provider
+missing it entirely makes Pi report a composition error for the whole
+registry. `add` fills `api: "openai-completions"` onto the Provider-level
+field whenever it is absent — whether the Provider is brand new or one this
+plugin (or you, by hand) already wrote without it — self-healing that
+Provider the next time you re-run `add` against it. An existing Provider
+that already carries `api` (any value) is never touched, per
+fill-never-overwrite.
+
 ### `LLAMA_SWAP_CONFIG_PATH`
 
 `context.ts`'s third context-resolution source reads llama-swap's own
