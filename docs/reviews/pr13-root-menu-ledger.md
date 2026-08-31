@@ -74,3 +74,12 @@ npx tsc --noEmit
 ## Disposition
 
 PR #13 left **open** for the maintainer's review — not merged by this session. All ledger items are closed (fixed or refuted) or explicitly carried forward (R4-011); no BLOCKER/CRITICAL findings remain open in the fix → re-review loop.
+
+### Rider scoped re-review (2026-08-31) — CONVERGED
+
+R2-012/R2-013 verified (incl. `http://[::1]:8080` → port present); coerceScheme extraction byte-identical; 232/232, tsc clean. Info rows:
+
+| id | lens | location | severity | status | evidence |
+|---|---|---|---|---|---|
+| R3-027 | reliability | index.ts typed `add <url>` branch (untouched) | WARNING | info | Typed URL without a port bypasses `missingPort()` and probes an implicit port — pre-existing, scoped out by the rider's JSDoc; README doesn't mention the asymmetry. Fix when the typed path is next touched (or apply `missingPort` to both paths in v0.2). |
+| R3-028 | reliability | this ledger | SUGGESTION | info | R3-026 refutation was 3-of-3 (reproducibility concurred after the ledger was written); corrected above. |
