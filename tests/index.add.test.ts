@@ -428,6 +428,36 @@ describe("add — batched context-window prompt (v0.1.1 hotfix item 3b)", () => 
   });
 });
 
+describe("add — bounded dialog text for large batches (R4-010)", () => {
+  it("caps the batched context-window select title at 8 inline ids and appends '… and N more' for a 25-model Server", async () => {
+    const ids = Array.from({ length: 25 }, (_, i) => `model-${i}`);
+    const ctx = fakeCtx();
+    ctx.select.mockImplementation(async (title: string) => (title.startsWith("Context window") ? "32k (32768)" : "mlx-serve"));
+    const ports = basePorts({ fetch: reachableFetch(ids) });
+
+    await add("localhost:11234", ctx, ports);
+
+    const contextCall = ctx.select.mock.calls.find(([title]) => (title as string).startsWith("Context window"));
+    const title = contextCall?.[0] as string;
+    expect(title).toContain("and 17 more");
+    expect(title.length).toBeLessThan(300);
+  });
+
+  it("caps the batched reasoning confirm message at 8 inline pairs and appends '… and N more' for 25 family-matched models", async () => {
+    const ids = Array.from({ length: 25 }, (_, i) => `qwen3-model-${i}`);
+    const ctx = fakeCtx();
+    ctx.confirm.mockResolvedValue(true);
+    const ports = basePorts({ fetch: reachableFetch(ids) });
+
+    await add("localhost:11234", ctx, ports);
+
+    expect(ctx.confirm).toHaveBeenCalledTimes(1);
+    const message = ctx.confirm.mock.calls[0][1] as string;
+    expect(message).toContain("and 17 more");
+    expect(message.length).toBeLessThan(400);
+  });
+});
+
 describe("add — thinkingFormat proposal (family heuristic, no per-model override — v0.1.1 hotfix item 3c)", () => {
   it("omits thinkingFormat entirely for an unmatched family, without prompting for it", async () => {
     const ctx = fakeCtx();

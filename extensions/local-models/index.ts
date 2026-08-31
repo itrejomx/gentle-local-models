@@ -52,6 +52,23 @@ const CONTEXT_WINDOW_PRESETS: ReadonlyArray<{ label: string; value: number }> = 
 ];
 const CUSTOM_CONTEXT_WINDOW_OPTION = "Custom…";
 
+// R4-010: caps how many ids/pairs a batched dialog inlines before summarizing
+// the rest, so a large Server (e.g. 25 models) doesn't produce an
+// unreadably long select title or confirm message.
+const DIALOG_ID_LIMIT = 8;
+
+/**
+ * Joins `items` for inline display in a dialog title/message, bounded at
+ * `DIALOG_ID_LIMIT` entries — beyond that, appends "… and N more" instead of
+ * listing every remaining entry (R4-010).
+ */
+function boundedJoin(items: string[], limit = DIALOG_ID_LIMIT): string {
+  if (items.length <= limit) {
+    return items.join(", ");
+  }
+  return `${items.slice(0, limit).join(", ")} … and ${items.length - limit} more`;
+}
+
 /** Provider keys that `omlx launch pi` / `mtplx start pi` rewrite wholesale (spec R1, WAYFINDER.md). */
 const REWRITTEN_PROVIDER_KEYS: Partial<Record<ServerKind, string>> = {
   omlx: "omlx launch pi",
@@ -248,7 +265,7 @@ export async function add(input: string, ctx: AddContext, ports: AddPorts): Prom
   const placeholderModels: string[] = [];
 
   if (unresolvedModels.length > 0 && ctx.hasUI) {
-    const title = `Context window for ${unresolvedModels.length} model${unresolvedModels.length === 1 ? "" : "s"} without a source: ${unresolvedModels.join(", ")}`;
+    const title = `Context window for ${unresolvedModels.length} model${unresolvedModels.length === 1 ? "" : "s"} without a source: ${boundedJoin(unresolvedModels)}`;
     const options = [...CONTEXT_WINDOW_PRESETS.map((preset) => preset.label), CUSTOM_CONTEXT_WINDOW_OPTION];
     const choice = await selectFromList(ctx.ui, title, options);
 
@@ -330,7 +347,7 @@ export async function add(input: string, ctx: AddContext, ports: AddPorts): Prom
   const acceptedFamilyIds = new Set<string>();
   if (familyCandidates.length > 0) {
     if (ctx.hasUI) {
-      const pairs = familyCandidates.map((c) => `${c.id} → ${c.thinkingFormat}`).join(", ");
+      const pairs = boundedJoin(familyCandidates.map((c) => `${c.id} → ${c.thinkingFormat}`));
       const accepted = await toggleSetting(
         ctx.ui,
         "Mark reasoning models",
