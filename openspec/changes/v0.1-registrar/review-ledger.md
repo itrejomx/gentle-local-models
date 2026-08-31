@@ -159,3 +159,53 @@ All six fixed rows verified against 0c21bf8..04b8a99; 149/149 green, tsc clean. 
 |---|---|---|---|---|---|
 | R3-019 | reliability | index.ts declaredReasoning check | WARNING | info | A Server declaring capabilities WITHOUT "reasoning" falls through to the family confirm (capabilities is an additive positive signal, not exhaustive). Defensible; document if capabilities semantics are formalized. |
 | R3-020 | reliability | tests/index.add.test.ts:340-351 | WARNING | info | Test title claims negative-value coverage but only feeds "0"; logic correct by inspection (parsed > 0). Add "-5" case next time the file is touched. |
+
+## PR9 index.ts `list`/`prune` wiring (`pr8-add...pr9-list-prune`) — Full 4R sweep, 2026-08-30
+
+Sweep: full 4R (index.ts remains the shell that touches `ctx` and
+orchestrates the one module allowed to mutate `~/.pi/agent/models.json`,
+and this batch adds a destructive multi-Provider write path — `prune` —
+matching PR6/PR8's hot-path precedent). 4 lenses (review-risk,
+review-resilience, review-readability, review-reliability) ran one sweep
+each against the pre-fix diff; `npx vitest run` was 165/165 green
+pre-fix. The lens ledgers merged into 3 BLOCKER/CRITICAL candidates for
+adversarial verification; A was independently flagged by two lenses
+(risk and reliability) and carries one merged fix. 3 refuters
+(correctness, exploitability/impact, reproducibility) evaluated the
+complete merged candidate list; unanimous STANDS (3/3) on all 3. This
+round (fix round 1) resolves A and C as CRITICAL fixes; B is a
+WARNING-tier consistency rider the orchestrator explicitly authorized to
+ride along in the same round rather than opening a separate pass.
+
+| id | lens | location | severity | status | evidence |
+|---|---|---|---|---|---|
+| A — R1-006, R3-021 | risk, reliability | `extensions/local-models/detect.ts` `probe`; `extensions/local-models/index.ts` `prune` (pre-fix) | CRITICAL | fixed | `probe()` folded "the Server responded HTTP 200 with zero models" into the same `status: "unreachable"` bucket as a genuine connection failure/timeout, and `prune()` computed `liveModelIds` from `probeResult.status === "reachable" ? probeResult.models : []` — so a Server that was simply DOWN at probe time had every one of its registered models treated as Unserved and offered for deletion, in direct conflict with the glossary's definition ("a model listed in a Provider that its Server no longer reports" — which presumes the Server reported at all). 3/3 refuters STANDS. Fixed by splitting `ProbeResult` into three variants (`reachable`, the new `empty` — HTTP 200, zero models, the Server DID respond — and `unreachable`); `prune()` now excludes any `unreachable` Provider from candidates entirely and reports a per-provider skip naming the cause (`Could not reach {baseUrl} ({error}) — skipped, nothing will be pruned for {providerKey}`), while an `empty` response still legitimately marks every registered model Unserved (behavior preserved). `add()`/`list()` were updated to handle the new three-way type (`add` still rejects `empty` as unregisterable with the same prior copy; `list` renders `empty` as "reachable, 0 model(s)" and clears `lastError`, since the Server did respond). RED: a rejecting-fetch test proved the pre-fix code offered the down Provider's model in the confirm dialog; a mixed (one down, one responding) test proved the down Provider's models/key leaked into the same confirm message as the responding Provider's real candidates. |
+| C — R2-007 | reliability | `extensions/local-models/models-writer.ts` `commitPrune` (pre-fix, `raw === undefined` branch) | CRITICAL | fixed | `commitPrune()` returned `{kind:"written"}` when `models.json` no longer existed at write time (deleted between the shell's scan and the actual write) — a lying success reporting "Pruned N Unserved Models" with zero models actually removed and zero bytes written. 3/3 refuters STANDS. Fixed by reusing the existing `invalid` outcome variant (`errors: ["models.json no longer exists (deleted since the prune started)"]`, `backups` from `listBackupsSafely`) instead of `written`; `prune()`'s existing `invalid` rendering already surfaces this honestly with no further shell change needed. Also added the missing `commitPrune` cross-reference to `commit()`'s docstring (R2-008, one line, in the same file). RED: a stubbed `WriterPorts` returning data on the shell's pre-read then `undefined` on `commitPrune`'s own read proved the pre-fix code claimed `writeFile` never ran yet still returned `written`, and a matching `index.prune.test.ts` integration case proved the shell rendered no `"Pruned …"` message contradiction was possible pre-fix (it silently "succeeded" instead). Prior to this fix, `commitPrune` had ZERO dedicated unit tests in `tests/models-writer.test.ts` — this round adds three, partially closing R1-007. |
+| B — R4-007 | resilience | `extensions/local-models/index.ts` `list` (pre-fix, `saveState` call) | CRITICAL→WARNING (orchestrator-authorized, impact calibration) | fixed | `list()`'s `saveState` call ran unguarded after every per-provider reachability line was already shown, exactly mirroring PR8's R4-006 `add()` defect: a rejecting/throwing `StatePorts` escaped as an unhandled rejection. Impact was calibrated down from R4-006's CRITICAL to WARNING because (a) `list()` writes no external file of record — only in-plugin `lastError` bookkeeping, which today has no consumer that reads it back (`prune` recomputes liveness live via its own probe, never via stored `lastError`), so a lost write has no observable downstream effect yet, and (b) there is no "lying success" message at stake the way there was for `add()`'s "Registered" — `list()` makes no completion claim beyond what it already, correctly, printed per line. Fixed anyway as a consistency rider (orchestrator-authorized to ride along in this round rather than opening a separate pass) using the identical try/catch pattern and a parallel message ("Reachability recorded in memory, but plugin bookkeeping failed ({err}): last-error status was not saved."). RED: a rejecting `writeState` produced a genuine unhandled promise rejection pre-fix, proven via `await expect(list(...)).resolves...` failing with the raw thrown error. |
+
+Adversarial verification: 3 refuters (correctness, exploitability/impact,
+reproducibility) evaluated the complete merged candidate list (A, B, C —
+3 candidates) independently; unanimous STANDS (3/3) on all 3. No
+refutations.
+
+Verification after fix round 1: `npx vitest run` 175/175 green (165
+pre-fix baseline + 10 new: 3 detect.ts probe-status cases (2 rewritten
+for the new `empty` status, 1 new non-200-stays-unreachable case), 3
+`index.prune.test.ts` cases (unreachable-excluded, empty-preserves-prior-
+behavior, mixed), 1 `index.list.test.ts` empty-status render case, 1
+`index.list.test.ts` R4-007 guard case, 3 `models-writer.test.ts`
+`commitPrune` cases (invalid-not-written, no-writeFile-call, normal-path
+sanity) — net +10 after also removing 2 superseded pre-fix assertions —
+and 1 `index.prune.test.ts` R2-007 shell-level integration case);
+`npx tsc --noEmit` exits 0. Diff vs. the pre-fix tip (`9456609`): 7 files
+changed, 336 insertions(+), 31 deletions(-).
+
+Info rows (not fixed, documented instead):
+
+| id | lens | location | severity | status | evidence |
+|---|---|---|---|---|---|
+| R3-022 | reliability | `extensions/local-models/index.ts` `list` (`known` Map dedup) | WARNING | info | `list()` dedupes models.json Providers and plugin-state Servers by raw `baseUrl` string equality, not `detect.normalize()`-normalized equality — two entries for the same Server differing only in trailing-slash/`:port` form would be probed and rendered twice instead of deduped. Fix when `list()` is next touched. |
+| R4-008 | resilience | `extensions/local-models/index.ts` `list`/`prune` (pre-read of `models.json`) | WARNING | info | Both `list()` and `prune()` call `ports.writer.ports.readFile(ports.writer.path)` directly, unguarded by try/catch, before any probing happens — a rejecting `readFile` (as opposed to returning `undefined`) still escapes as an unhandled rejection for both commands. Narrower than R4-007/R2-007 (a rejecting port vs. a resolved-but-missing file) but the same category of gap; add a guard when either function is next touched. |
+| R2-008 | readability | `extensions/local-models/models-writer.ts` `commit`/`commitPrune` cross-reference | SUGGESTION | fixed (as part of C) | `commitPrune`'s docstring already pointed at `commit()` ("the same guarded orchestration as `commit()`"), but `commit()`'s own docstring had no reverse pointer — a reader starting at `commit()` had no signpost to `commitPrune`. Added a one-line cross-reference to `commit()`'s docstring in the same file already touched by C. |
+| R2-009 | readability | `extensions/local-models/index.ts` `buildAddPorts` | SUGGESTION | fixed | The function name implied add-only scope, but it is the shared port-builder for `add`, `list`, and `prune` (all three call sites use it). Renamed to `buildCommandPorts`; no behavior change. |
+| R1-007 | risk | `extensions/local-models/models-writer.ts` `commitPrune` failure-branch coverage | WARNING | info (partially closed) | Before this round, `commitPrune` had zero dedicated unit tests in `tests/models-writer.test.ts` (only exercised indirectly via `index.prune.test.ts`'s happy-path/backup/cancel cases) — none of `commitPrune`'s own `refused`/`invalid`(malformed JSON)/`write-failed`/`restored`/`rolled-back`/`restore-failed` branches had assertion-level coverage independent of `commit()`'s. This round's fix for C adds 3 `commitPrune`-specific unit tests (the new `raw === undefined` → `invalid` case, a no-writeFile-call assertion, and one normal-removal sanity case), but the remaining branches (`refused` on comments, malformed-JSON `invalid`, the `write-failed`/`restored`/`rolled-back`/`restore-failed` recovery paths) still have no `commitPrune`-specific test — only `commit()`'s equivalents are covered. Close fully next time `models-writer.ts` is touched, by mirroring `commit()`'s existing orchestration test block for `commitPrune`. |
