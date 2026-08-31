@@ -52,7 +52,7 @@ describe("probe", () => {
     });
   });
 
-  it("treats a response where every model entry is invalid as zero models (R3-003)", async () => {
+  it("treats a response where every model entry is invalid as its own 'empty' status, not 'unreachable' (R1-006/R3-021)", async () => {
     const fetchFn: FetchLike = vi.fn(async () => ({
       ok: true,
       status: 200,
@@ -61,13 +61,10 @@ describe("probe", () => {
 
     const result = await probe(fetchFn, "http://localhost:11234/v1");
 
-    expect(result.status).toBe("unreachable");
-    if (result.status === "unreachable") {
-      expect(result.error).toMatch(/zero models/i);
-    }
+    expect(result).toEqual({ status: "empty", baseUrl: "http://localhost:11234/v1", models: [] });
   });
 
-  it("treats a 200 response with zero models as a failure, not a success", async () => {
+  it("reports a 200 response with zero models as 'empty' — the Server responded, distinct from 'unreachable' (R1-006/R3-021)", async () => {
     const fetchFn: FetchLike = vi.fn(async () => ({
       ok: true,
       status: 200,
@@ -76,11 +73,19 @@ describe("probe", () => {
 
     const result = await probe(fetchFn, "http://localhost:8080/v1");
 
-    expect(result.status).toBe("unreachable");
-    expect(result).toMatchObject({ baseUrl: "http://localhost:8080/v1" });
-    if (result.status === "unreachable") {
-      expect(result.error).toMatch(/zero models/i);
-    }
+    expect(result).toEqual({ status: "empty", baseUrl: "http://localhost:8080/v1", models: [] });
+  });
+
+  it("keeps a non-200 response as 'unreachable' (the Server did not usefully respond)", async () => {
+    const fetchFn: FetchLike = vi.fn(async () => ({
+      ok: false,
+      status: 500,
+      json: async () => ({}),
+    })) as unknown as FetchLike;
+
+    const result = await probe(fetchFn, "http://localhost:8080/v1");
+
+    expect(result).toEqual({ status: "unreachable", baseUrl: "http://localhost:8080/v1", error: "HTTP 500" });
   });
 
   it("reports unreachable with the last error when the Server rejects", async () => {

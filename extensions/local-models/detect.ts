@@ -16,13 +16,27 @@ export interface ProbeReachable {
   models: string[];
 }
 
+/**
+ * The Server RESPONDED (HTTP 200) but currently reports zero models. Kept
+ * distinct from `ProbeUnreachable` (R1-006/R3-021): per the glossary, an
+ * Unserved Model is one its Server "no longer reports" — which presumes the
+ * Server responded at all. A connection failure/timeout/non-200 means the
+ * Server said nothing, and callers (`prune`, in particular) must not treat
+ * silence as "reports zero models".
+ */
+export interface ProbeEmpty {
+  status: "empty";
+  baseUrl: string;
+  models: [];
+}
+
 export interface ProbeUnreachable {
   status: "unreachable";
   baseUrl: string;
   error: string;
 }
 
-export type ProbeResult = ProbeReachable | ProbeUnreachable;
+export type ProbeResult = ProbeReachable | ProbeEmpty | ProbeUnreachable;
 
 const DEFAULT_TIMEOUT_MS = 1000;
 
@@ -49,8 +63,10 @@ function errorMessage(err: unknown): string {
 
 /**
  * Probes `GET {baseUrl}/models` with a timeout (default 1 s, per spec).
- * HTTP 200 with zero models is treated as a failure, not a success.
- * Unreachable/timed-out probes report failure with the last error preserved.
+ * HTTP 200 with zero (or all-invalid, R3-003) models reports its own
+ * `empty` status — the Server responded, it just has nothing to report right
+ * now — kept distinct from `unreachable` (non-200, connection failure, or
+ * timeout: the Server never usefully responded at all; R1-006/R3-021).
  */
 export async function probe(
   fetchFn: FetchLike,
@@ -76,7 +92,7 @@ export async function probe(
       : [];
 
     if (models.length === 0) {
-      return { status: "unreachable", baseUrl, error: "reachable but reported zero models" };
+      return { status: "empty", baseUrl, models: [] };
     }
 
     return { status: "reachable", baseUrl, models };

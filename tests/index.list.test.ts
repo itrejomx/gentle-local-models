@@ -156,6 +156,30 @@ describe("list — probe failures render 'not detected' + last error, and update
     expect(saved.servers[0].lastError).toBe("ECONNREFUSED");
   });
 
+  it("renders a 200-with-zero-models response as reachable (not 'not detected') and clears lastError — the Server responded (R1-006/R3-021)", async () => {
+    const ctx = fakeCtx();
+    const statePorts = fakeStatePorts({
+      version: 1,
+      piVersion: "",
+      servers: [
+        { baseUrl: "http://localhost:11234/v1", kind: "mtplx", servingMode: "single-model", providerKey: "mtplx", owner: "plugin", lastError: "ECONNREFUSED", models: {} },
+      ],
+    });
+    const ports: ListPorts = {
+      fetch: reachableFetch({ "http://localhost:11234/v1": [] }),
+      writer: { path: "/pi/agent/models.json", ports: fakeWriterPorts() },
+      state: statePorts,
+    };
+
+    await list(ctx, ports);
+
+    const messages = ctx.notify.mock.calls.map((call) => call[0]).join("\n");
+    expect(messages).toContain("reachable, 0 model(s)");
+    expect(messages).not.toContain("not detected");
+    const saved = JSON.parse(statePorts.writes.at(-1) as string) as PluginState;
+    expect(saved.servers[0].lastError).toBeUndefined();
+  });
+
   it("clears a stale state.lastError once the Server is reachable again", async () => {
     const ctx = fakeCtx();
     const statePorts = fakeStatePorts({

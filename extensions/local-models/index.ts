@@ -153,8 +153,12 @@ export async function add(input: string, ctx: AddContext, ports: AddPorts): Prom
   }
 
   const probeResult = await withLoader(ctx.ui, `Probing ${baseUrl}…`, () => probe(ports.fetch, baseUrl));
-  if (probeResult.status === "unreachable") {
-    notify(ctx.ui, `Could not reach ${baseUrl}: ${probeResult.error}`, "error");
+  if (probeResult.status !== "reachable") {
+    // R1-006/R3-021: "empty" (the Server responded but reports zero models)
+    // is still not registerable — there is nothing to add — so it takes the
+    // same rejection path as a genuine connection failure, with its own copy.
+    const detail = probeResult.status === "empty" ? "reachable but reported zero models" : probeResult.error;
+    notify(ctx.ui, `Could not reach ${baseUrl}: ${detail}`, "error");
     return;
   }
 
@@ -419,15 +423,19 @@ export async function list(ctx: ListContext, ports: ListPorts): Promise<void> {
     const probeResult = probeResults[i];
     const hasServerRecord = state.servers.some((server) => server.providerKey === entry.providerKey);
 
-    if (probeResult.status === "reachable") {
-      notify(ctx.ui, `${entry.providerKey} (${entry.owner}) — ${entry.baseUrl} — reachable, ${probeResult.models.length} model(s)`, "info");
-      if (hasServerRecord) {
-        nextState = withLastError(nextState, entry.providerKey, undefined);
-      }
-    } else {
+    if (probeResult.status === "unreachable") {
       notify(ctx.ui, `${entry.providerKey} (${entry.owner}) — ${entry.baseUrl} — not detected: ${probeResult.error}`, "warning");
       if (hasServerRecord) {
         nextState = withLastError(nextState, entry.providerKey, probeResult.error);
+      }
+    } else {
+      // R1-006/R3-021: "empty" means the Server RESPONDED (it just reports
+      // zero models right now) — that is genuinely "reachable", not
+      // "not detected", so it renders in the same informative bucket as a
+      // non-empty reachable result and also clears any stale lastError.
+      notify(ctx.ui, `${entry.providerKey} (${entry.owner}) — ${entry.baseUrl} — reachable, ${probeResult.models.length} model(s)`, "info");
+      if (hasServerRecord) {
+        nextState = withLastError(nextState, entry.providerKey, undefined);
       }
     }
   }
@@ -488,7 +496,22 @@ export async function prune(ctx: PruneContext, ports: PrunePorts): Promise<void>
   for (let i = 0; i < localProviders.length; i++) {
     const providerEntry = localProviders[i];
     const probeResult = probeResults[i];
-    const liveModelIds = new Set(probeResult.status === "reachable" ? probeResult.models : []);
+
+    // R1-006/R3-021: a Server that never RESPONDED has not "reported"
+    // anything (glossary: an Unserved Model is one its Server no longer
+    // reports). Treating a connection failure/timeout the same as "reports
+    // zero models" would offer to prune every model of a Server that is
+    // merely down right now — exclude it entirely instead, and say why.
+    if (probeResult.status === "unreachable") {
+      notify(
+        ctx.ui,
+        `Could not reach ${providerEntry.baseUrl} (${probeResult.error}) — skipped, nothing will be pruned for ${providerEntry.providerKey}.`,
+        "warning",
+      );
+      continue;
+    }
+
+    const liveModelIds = new Set(probeResult.models);
     const unserved = providerEntry.models.map((model) => model.id).filter((id) => !liveModelIds.has(id));
     if (unserved.length > 0) {
       candidates.push({ providerKey: providerEntry.providerKey, owner: ownerOf(state, providerEntry.providerKey), unserved });

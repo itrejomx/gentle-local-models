@@ -199,6 +199,78 @@ describe("prune — any local Provider, ownership per row, Unserved Models via l
     expect(Object.keys(writerPorts.files)).toHaveLength(1);
   });
 
+  it("excludes an unreachable local Provider from candidates and reports a skip, naming the cause (R1-006/R3-021)", async () => {
+    const ctx = fakeCtx();
+    const writerPorts = fakeWriterPorts({
+      [MODELS_JSON_PATH]: modelsJsonFile({
+        mtplx: { baseUrl: "http://localhost:11234/v1", models: [{ id: "some-model" }] },
+      }),
+    });
+    const ports: PrunePorts = {
+      fetch: vi.fn(async () => {
+        throw new Error("ECONNREFUSED");
+      }) as unknown as FetchLike,
+      writer: { path: MODELS_JSON_PATH, ports: writerPorts },
+      state: fakeStatePorts(),
+    };
+
+    await prune(ctx, ports);
+
+    // The Server never responded — its registered model must NOT be treated
+    // as an Unserved Model, and no confirmation should ever mention it.
+    expect(ctx.confirm).not.toHaveBeenCalled();
+    expect(ctx.notify).toHaveBeenCalledWith(
+      expect.stringMatching(/could not reach http:\/\/localhost:11234\/v1 \(ECONNREFUSED\).*skipped.*mtplx/i),
+      "warning",
+    );
+  });
+
+  it("treats a 200-with-zero-models response as the Server legitimately reporting none — all registered models are Unserved (preserves prior behavior)", async () => {
+    const ctx = fakeCtx();
+    const writerPorts = fakeWriterPorts({
+      [MODELS_JSON_PATH]: modelsJsonFile({
+        mtplx: { baseUrl: "http://localhost:11234/v1", models: [{ id: "gone-a" }, { id: "gone-b" }] },
+      }),
+    });
+    const ports: PrunePorts = {
+      fetch: reachableFetch({ "http://localhost:11234/v1": [] }),
+      writer: { path: MODELS_JSON_PATH, ports: writerPorts },
+      state: fakeStatePorts(),
+    };
+
+    await prune(ctx, ports);
+
+    expect(ctx.confirm).toHaveBeenCalledTimes(1);
+    const message = ctx.confirm.mock.calls[0][1] as string;
+    expect(message).toContain("gone-a");
+    expect(message).toContain("gone-b");
+  });
+
+  it("mixed: an unreachable Provider is skipped while a responding Provider's Unserved Models still get shown", async () => {
+    const ctx = fakeCtx();
+    const writerPorts = fakeWriterPorts({
+      [MODELS_JSON_PATH]: modelsJsonFile({
+        mtplx: { baseUrl: "http://localhost:11234/v1", models: [{ id: "down-model" }] },
+        lmstudio: { baseUrl: "http://localhost:1234/v1", models: [{ id: "served-model" }, { id: "gone-model" }] },
+      }),
+    });
+    const ports: PrunePorts = {
+      fetch: reachableFetch({ "http://localhost:1234/v1": ["served-model"] }), // mtplx's baseUrl isn't in the map ⇒ rejects
+      writer: { path: MODELS_JSON_PATH, ports: writerPorts },
+      state: fakeStatePorts(),
+    };
+
+    await prune(ctx, ports);
+
+    expect(ctx.notify).toHaveBeenCalledWith(expect.stringMatching(/skipped.*mtplx/i), "warning");
+    expect(ctx.confirm).toHaveBeenCalledTimes(1);
+    const message = ctx.confirm.mock.calls[0][1] as string;
+    expect(message).toContain("lmstudio");
+    expect(message).toContain("gone-model");
+    expect(message).not.toContain("down-model");
+    expect(message).not.toContain("mtplx");
+  });
+
   it("never prunes non-interactively — warns naming the candidates instead of confirming", async () => {
     const ctx = fakeCtx();
     ctx.hasUI = false;
