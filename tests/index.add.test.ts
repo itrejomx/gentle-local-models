@@ -601,6 +601,28 @@ describe("add — WriteOutcome rendering (every kind gets a distinct message)", 
     expect(ctx.notify).toHaveBeenCalledWith(expect.stringMatching(/restored/i), "error");
   });
 
+  it("restored + verified: says the backup restored and verified, not a false failure (v0.1.1 hotfix item 2)", async () => {
+    // Reproduces the live E2E bug: models.json restored to a byte-identical
+    // backup, but the old post-restore check re-verified against the NEW
+    // models that were just rolled back — always absent post-restore — so it
+    // always reported "Restore verification failed" even here, on a genuinely
+    // perfect restore.
+    const existingFile = JSON.stringify({ providers: {} });
+    const ctx = fakeCtx();
+    const writer = fakeWriterPorts(
+      { "/pi/agent/models.json": existingFile },
+      {
+        verify: async (_providerKey: string, modelIds: string[]) =>
+          modelIds.length === 0 ? { ok: true as const } : { ok: false as const, error: "empty provider map" },
+      },
+    );
+    const ports = basePorts({ writer: { path: "/pi/agent/models.json", ports: writer } });
+
+    await add("localhost:11234", ctx, ports);
+
+    expect(ctx.notify).toHaveBeenCalledWith(expect.stringContaining("Backup restored and verified"), "error");
+  });
+
   it("rolled-back: notifies distinctly when no backup existed to restore", async () => {
     const ctx = fakeCtx();
     const writer = fakeWriterPorts({}, { verify: async () => ({ ok: false, error: "empty provider map" }) });

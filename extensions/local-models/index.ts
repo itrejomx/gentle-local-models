@@ -97,8 +97,10 @@ function renderOutcome(outcome: WriteOutcome, writerPath: string): { message: st
       };
     case "restored":
       return {
-        message: `Write failed (${outcome.error}). Restored backup ${outcome.path}. ${
-          outcome.verification.ok ? "Restore verified." : `Restore verification failed: ${outcome.verification.error}`
+        message: `Write failed (${outcome.error}). ${
+          outcome.verification.ok
+            ? `Backup restored and verified: ${outcome.path}.`
+            : `Restored backup ${outcome.path}, but the restored file failed to load: ${outcome.verification.error}.`
         }`,
         type: "error",
       };

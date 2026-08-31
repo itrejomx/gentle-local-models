@@ -83,6 +83,22 @@ export interface WriterPorts {
   deleteFile(path: string): Promise<void>;
   listBackups(path: string): Promise<string[]>;
   now(): number;
+  /**
+   * Confirms a write landed, via Pi's own model-registry read-back. Two call
+   * conventions (v0.1.1 hotfix item 2 documents both explicitly):
+   * - `verifyWritten(providerKey, modelIds)` — a SPECIFIC-model check: refresh,
+   *   then confirm every one of `modelIds` is now found under `providerKey`.
+   *   Used only right after a MERGE write, where those models are expected to
+   *   exist in the result (`commit()`'s primary post-write verify).
+   * - `verifyWritten("", [])` — a GENERIC "did the file load cleanly" check:
+   *   refresh and report only whether the refresh itself errored, with no
+   *   per-model lookup. Used for `commitPrune`'s post-write verify (models
+   *   were just REMOVED, so checking for their presence would prove nothing)
+   *   AND for the post-RESTORE re-verify after any recovery (the models from
+   *   the failed write were rolled back and can never be found — checking for
+   *   them there would always report a false failure, never proof the
+   *   restored file is good).
+   */
   verifyWritten(providerKey: string, modelIds: string[]): Promise<{ ok: true } | { ok: false; error: string }>;
 }
 
@@ -631,14 +647,7 @@ export async function commit(
     // A rejecting main write can still leave `path` partially written by a
     // non-atomic port (see WriterPorts.writeFile's atomicity contract, D) —
     // attempt a restore rather than trust whatever is now on disk (C).
-    return recoverFromFailedWrite(
-      ports,
-      path,
-      providerKey,
-      modelIds,
-      `main write failed: ${errorMessage(error)}`,
-      backupPath,
-    );
+    return recoverFromFailedWrite(ports, path, `main write failed: ${errorMessage(error)}`, backupPath);
   }
 
   let verification: { ok: true } | { ok: false; error: string };
@@ -649,7 +658,7 @@ export async function commit(
   }
 
   if (!verification.ok) {
-    return recoverFromFailedWrite(ports, path, providerKey, modelIds, verification.error, backupPath);
+    return recoverFromFailedWrite(ports, path, verification.error, backupPath);
   }
 
   return { kind: "written", backup: backupPath, lint: lintWarnings };
@@ -732,7 +741,7 @@ export async function commitPrune(ports: WriterPorts, path: string, removals: Pr
   try {
     await ports.writeFile(path, JSON.stringify(merged, null, 2));
   } catch (error) {
-    return recoverFromFailedWrite(ports, path, "", [], `main write failed: ${errorMessage(error)}`, backupPath);
+    return recoverFromFailedWrite(ports, path, `main write failed: ${errorMessage(error)}`, backupPath);
   }
 
   let verification: { ok: true } | { ok: false; error: string };
@@ -743,7 +752,7 @@ export async function commitPrune(ports: WriterPorts, path: string, removals: Pr
   }
 
   if (!verification.ok) {
-    return recoverFromFailedWrite(ports, path, "", [], verification.error, backupPath);
+    return recoverFromFailedWrite(ports, path, verification.error, backupPath);
   }
 
   return { kind: "written", backup: backupPath, lint: lintWarnings };
@@ -758,12 +767,18 @@ export async function commitPrune(ports: WriterPorts, path: string, removals: Pr
  * If the restore machinery itself throws (C), that becomes a `write-failed`
  * outcome instead of escaping — the main write already landed in `path`,
  * unconfirmed, and recovery could not even be attempted.
+ *
+ * v0.1.1 hotfix item 2: the post-restore re-verify ALWAYS uses the generic
+ * `verifyWritten("", [])` convention (see `WriterPorts.verifyWritten`'s
+ * JSDoc) — never a specific-model check for the models the FAILED write was
+ * trying to add. Those models were just rolled back by the restore above,
+ * so they can never be found; checking for them here reported a false
+ * "Restore verification failed" on every restore, even a byte-identical one
+ * (the exact live E2E symptom this hotfix fixes).
  */
 async function recoverFromFailedWrite(
   ports: WriterPorts,
   path: string,
-  providerKey: string,
-  modelIds: string[],
   triggeringError: string,
   backupPath: string | undefined,
 ): Promise<WriteOutcome> {
@@ -796,10 +811,11 @@ async function recoverFromFailedWrite(
   // Successful restore (D3): refresh again and report that second
   // verification's result too — a successful restore is not itself proof
   // the restored content is good. A throwing re-verify is itself caught so
-  // this final stage cannot leak an exception either.
+  // this final stage cannot leak an exception either. Generic check ("", []) —
+  // see this function's JSDoc and WriterPorts.verifyWritten's contract.
   let verification: { ok: true } | { ok: false; error: string };
   try {
-    verification = await ports.verifyWritten(providerKey, modelIds);
+    verification = await ports.verifyWritten("", []);
   } catch (error) {
     verification = { ok: false, error: `verifyWritten threw: ${errorMessage(error)}` };
   }

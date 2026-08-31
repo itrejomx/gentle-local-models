@@ -597,6 +597,33 @@ describe("commit — full orchestration against stubbed WriterPorts (R2)", () =>
     expect(ports.files[path]).toBe(original);
   });
 
+  it("re-verifies a successful restore against the RESTORED file loading cleanly, not against the rolled-back models (v0.1.1 hotfix item 2)", async () => {
+    // Reproduces the live E2E bug: after a genuinely perfect restore, the old
+    // code re-called verifyWritten(providerKey, modelIds) for the NEW models
+    // that were just rolled back — they can never be found post-restore, so
+    // it always reported "Restore verification failed" even on a byte-
+    // identical restore. The fix must re-verify with the generic ("", [])
+    // "did the file load" check instead (the same convention commitPrune's
+    // main-write verify already uses).
+    const original = JSON.stringify({ providers: { lmstudio: { models: [{ id: "m1", name: "m1" }] } } });
+    const verify: WriterPorts["verifyWritten"] = async (providerKey, modelIds) => {
+      if (modelIds.length === 0) {
+        return { ok: true };
+      }
+      return { ok: false, error: `model "${modelIds[0]}" not found in provider "${providerKey}" after refresh` };
+    };
+    const ports = memoryPorts({ [path]: original }, { now: 42, verify });
+
+    const outcome = await commit(ports, path, "lmstudio", { models: [{ id: "m2" }] });
+
+    expect(outcome).toEqual({
+      kind: "restored",
+      path: `${path}.42.bak`,
+      error: 'model "m2" not found in provider "lmstudio" after refresh',
+      verification: { ok: true },
+    });
+  });
+
   it("reports a distinct rolled-back-to-no-file variant, with no ambiguous backup sentinel, when no backup exists", async () => {
     const ports = memoryPorts({}, { now: 5, verify: async () => ({ ok: false, error: "empty provider map" }) });
 
