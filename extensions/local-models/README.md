@@ -22,7 +22,8 @@ the bare command falls back to the usage notice instead of opening a dialog.
 Picking "Add a Server…", or typing `/local-models add` with no URL, prompts
 for the Server's base URL via an editable prefill (`http://localhost:`) —
 edit it to the real host:port and submit. Cancelling, or submitting empty
-text, is a quiet "Cancelled." — nothing is probed or written. A submitted
+text, is a quiet "Registration cancelled." (matching the Server-kind
+picker's own cancel copy) — nothing is probed or written. A submitted
 value continues into the normal `add` flow below (host:port, a trailing
 `/v1`, or `/v1/` all normalize the same way; an unparsable URL gets the same
 friendly error as typing it directly).

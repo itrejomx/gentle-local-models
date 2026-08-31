@@ -221,26 +221,26 @@ describe("dispatch — add with no URL (from the menu or typed bare)", () => {
     expect(written.providers["mlx-serve"]).toBeDefined();
   });
 
-  it("cancel at the prompt (editor returns undefined): notifies 'Cancelled.' only, never probes", async () => {
+  it("cancel at the prompt (editor returns undefined): notifies 'Registration cancelled.' only, never probes", async () => {
     const ctx = fakeCtx();
     ctx.editor.mockImplementation(async () => undefined);
     const ports = basePorts();
 
     await dispatch("add", ctx, ports);
 
-    expect(ctx.notify).toHaveBeenCalledWith("Cancelled.", "info");
+    expect(ctx.notify).toHaveBeenCalledWith("Registration cancelled.", "info");
     expect(ctx.notify).toHaveBeenCalledTimes(1);
     expect(ports.fetch).not.toHaveBeenCalled();
   });
 
-  it("empty/whitespace-only answer at the prompt: same quiet 'Cancelled.' path as a real cancel", async () => {
+  it("empty/whitespace-only answer at the prompt: same quiet 'Registration cancelled.' path as a real cancel", async () => {
     const ctx = fakeCtx();
     ctx.editor.mockImplementation(async () => "   ");
     const ports = basePorts();
 
     await dispatch("add", ctx, ports);
 
-    expect(ctx.notify).toHaveBeenCalledWith("Cancelled.", "info");
+    expect(ctx.notify).toHaveBeenCalledWith("Registration cancelled.", "info");
     expect(ports.fetch).not.toHaveBeenCalled();
   });
 

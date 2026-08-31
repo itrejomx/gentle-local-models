@@ -704,7 +704,8 @@ function usage(ctx: AddContext, subcommand: string | undefined): void {
  * `add` (v0.1.2) — prompts for the base URL via the editor, prefilled
  * `http://localhost:`, instead of the old error-usage notify. A cancel or an
  * empty/whitespace-only answer takes the same quiet path: one info notify
- * ("Cancelled.") and nothing else — `promptWithPrefill` already collapses a
+ * ("Registration cancelled.", matching the Server-kind picker's own cancel
+ * copy — R2-012) and nothing else — `promptWithPrefill` already collapses a
  * real dialog cancel and `!ctx.hasUI` into the same `undefined`, so this one
  * check covers both. A real value falls straight into the normal `add` flow,
  * including its existing R3-002 friendly error for an invalid URL.
@@ -713,7 +714,7 @@ async function addPromptingUrl(ctx: AddContext, ports: AddPorts): Promise<void> 
   const answer = await promptWithPrefill(ctx, "Server base URL", "http://localhost:");
   const baseUrl = answer?.trim();
   if (!baseUrl) {
-    notify(ctx.ui, "Cancelled.", "info");
+    notify(ctx.ui, "Registration cancelled.", "info");
     return;
   }
   await add(baseUrl, ctx, ports);

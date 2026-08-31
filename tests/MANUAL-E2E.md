@@ -29,7 +29,7 @@ this checklist.
   - [ ] Pick "Add a Server…" — confirm an editable prompt opens, prefilled
         `http://localhost:`.
     - [ ] Cancel it (Esc), or clear it and submit empty — confirm a single
-          "Cancelled." notice, nothing probed or written.
+          "Registration cancelled." notice, nothing probed or written.
     - [ ] Edit it to a real Server's host:port (e.g. `localhost:11234` or
           `localhost:8080`) and submit — confirm it continues into the same
           flow as below.
