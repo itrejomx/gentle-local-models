@@ -6,7 +6,7 @@
 // imports Pi's runtime — only its types, which jiti erases (D1, D8).
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { isLocalHost, normalize, probe, probeAll, type FetchLike } from "./detect.ts";
+import { isLocalHost, missingPort, normalize, probe, probeAll, type FetchLike } from "./detect.ts";
 import {
   CONTEXT_WINDOW_PRESETS,
   DIALOG_ID_LIMIT,
@@ -707,14 +707,26 @@ function usage(ctx: AddContext, subcommand: string | undefined): void {
  * ("Registration cancelled.", matching the Server-kind picker's own cancel
  * copy — R2-012) and nothing else — `promptWithPrefill` already collapses a
  * real dialog cancel and `!ctx.hasUI` into the same `undefined`, so this one
- * check covers both. A real value falls straight into the normal `add` flow,
- * including its existing R3-002 friendly error for an invalid URL.
+ * check covers both. R2-013: the title now spells out an example
+ * (`http://localhost:8080`), and the submitted value must carry an explicit
+ * port — accepting the `http://localhost:` prefill unedited (or any other
+ * port-less host) reports "Include the port, e.g. http://localhost:8080"
+ * and returns without probing, rather than silently falling back to an
+ * implicit port (e.g. 80) and failing with a confusing connection error. A
+ * real port-bearing value falls straight into the normal `add` flow,
+ * including its existing R3-002 friendly error for an otherwise invalid
+ * URL. The typed `add <url>` path is unchanged — this check only applies to
+ * the prompted flow.
  */
 async function addPromptingUrl(ctx: AddContext, ports: AddPorts): Promise<void> {
-  const answer = await promptWithPrefill(ctx, "Server base URL", "http://localhost:");
+  const answer = await promptWithPrefill(ctx, "Server base URL (e.g. http://localhost:8080)", "http://localhost:");
   const baseUrl = answer?.trim();
   if (!baseUrl) {
     notify(ctx.ui, "Registration cancelled.", "info");
+    return;
+  }
+  if (missingPort(baseUrl)) {
+    notify(ctx.ui, "Include the port, e.g. http://localhost:8080", "error");
     return;
   }
   await add(baseUrl, ctx, ports);

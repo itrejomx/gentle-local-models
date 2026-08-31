@@ -26,10 +26,14 @@ this checklist.
       "List Servers", "Prune Unserved Models", in that order.
   - [ ] Press Esc/cancel — confirm nothing happens: no notification, nothing
         probed or written.
-  - [ ] Pick "Add a Server…" — confirm an editable prompt opens, prefilled
+  - [ ] Pick "Add a Server…" — confirm an editable prompt opens, titled
+        "Server base URL (e.g. http://localhost:8080)", prefilled
         `http://localhost:`.
     - [ ] Cancel it (Esc), or clear it and submit empty — confirm a single
           "Registration cancelled." notice, nothing probed or written.
+    - [ ] Submit the prefill unedited (still `http://localhost:`, no port) —
+          confirm "Include the port, e.g. http://localhost:8080" and that
+          nothing is probed or written.
     - [ ] Edit it to a real Server's host:port (e.g. `localhost:11234` or
           `localhost:8080`) and submit — confirm it continues into the same
           flow as below.

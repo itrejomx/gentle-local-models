@@ -33,9 +33,10 @@ function fakeCtx({ hasUI = true }: { hasUI?: boolean } = {}): AddContext & {
   });
   const confirm = vi.fn(async () => true);
   // Two independent editor dialogs share this fake: the new "Server base
-  // URL" prefill prompt (v0.1.2) and the Custom… contextWindow editor.
+  // URL" prefill prompt (v0.1.2, retitled with an example under R2-013) and
+  // the Custom… contextWindow editor.
   const editor = vi.fn(async (title: string) => {
-    if (title === "Server base URL") {
+    if (title === "Server base URL (e.g. http://localhost:8080)") {
       return "http://localhost:11234";
     }
     return "32768";
@@ -170,7 +171,7 @@ describe("dispatch — bare command (no subcommand)", () => {
 
     await dispatch("", ctx, ports);
 
-    expect(ctx.editor).toHaveBeenCalledWith("Server base URL", "http://localhost:");
+    expect(ctx.editor).toHaveBeenCalledWith("Server base URL (e.g. http://localhost:8080)", "http://localhost:");
     expect(ports.fetch).toHaveBeenCalled();
     const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
     expect(written.providers["mlx-serve"]).toBeDefined();
@@ -215,7 +216,7 @@ describe("dispatch — add with no URL (from the menu or typed bare)", () => {
 
     await dispatch("add", ctx, ports);
 
-    expect(ctx.editor).toHaveBeenCalledWith("Server base URL", "http://localhost:");
+    expect(ctx.editor).toHaveBeenCalledWith("Server base URL (e.g. http://localhost:8080)", "http://localhost:");
     expect(ports.fetch).toHaveBeenCalled();
     const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
     expect(written.providers["mlx-serve"]).toBeDefined();
@@ -253,6 +254,45 @@ describe("dispatch — add with no URL (from the menu or typed bare)", () => {
 
     expect(ctx.notify).toHaveBeenCalledWith(expect.stringContaining("not a valid"), "error");
   });
+
+  it("R2-013: submitting the http://localhost: prefill unedited (no explicit port) reports the port error and never probes", async () => {
+    const ctx = fakeCtx();
+    ctx.editor.mockImplementation(async (title: string) =>
+      title === "Server base URL (e.g. http://localhost:8080)" ? "http://localhost:" : "32768",
+    );
+    const ports = basePorts();
+
+    await dispatch("add", ctx, ports);
+
+    expect(ctx.notify).toHaveBeenCalledWith("Include the port, e.g. http://localhost:8080", "error");
+    expect(ports.fetch).not.toHaveBeenCalled();
+  });
+
+  it("R2-013: a scheme-ful URL with an explicit port proceeds to probe", async () => {
+    const ctx = fakeCtx();
+    ctx.editor.mockImplementation(async (title: string) =>
+      title === "Server base URL (e.g. http://localhost:8080)" ? "http://localhost:8080" : "32768",
+    );
+    const ports = basePorts();
+
+    await dispatch("add", ctx, ports);
+
+    expect(ctx.notify).not.toHaveBeenCalledWith("Include the port, e.g. http://localhost:8080", "error");
+    expect(ports.fetch).toHaveBeenCalled();
+  });
+
+  it("R2-013: a scheme-less host:port also proceeds to probe (same scheme-coercion as normalize)", async () => {
+    const ctx = fakeCtx();
+    ctx.editor.mockImplementation(async (title: string) =>
+      title === "Server base URL (e.g. http://localhost:8080)" ? "localhost:8080" : "32768",
+    );
+    const ports = basePorts();
+
+    await dispatch("add", ctx, ports);
+
+    expect(ctx.notify).not.toHaveBeenCalledWith("Include the port, e.g. http://localhost:8080", "error");
+    expect(ports.fetch).toHaveBeenCalled();
+  });
 });
 
 describe("dispatch — typed subcommands and unknown-subcommand usage are unchanged", () => {
@@ -262,7 +302,7 @@ describe("dispatch — typed subcommands and unknown-subcommand usage are unchan
 
     await dispatch("add localhost:11234", ctx, ports);
 
-    expect(ctx.editor).not.toHaveBeenCalledWith("Server base URL", expect.anything());
+    expect(ctx.editor).not.toHaveBeenCalledWith("Server base URL (e.g. http://localhost:8080)", expect.anything());
     expect(ctx.select).not.toHaveBeenCalledWith("Local models", expect.anything());
     expect(ports.fetch).toHaveBeenCalled();
   });

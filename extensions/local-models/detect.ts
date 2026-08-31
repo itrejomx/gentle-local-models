@@ -45,14 +45,17 @@ export type ProbeResult = ProbeReachable | ProbeEmpty | ProbeUnreachable;
 
 const DEFAULT_TIMEOUT_MS = 1000;
 
+function coerceScheme(input: string): string {
+  return /^https?:\/\//i.test(input) ? input : `http://${input}`;
+}
+
 /**
  * Normalizes a Server base URL input, accepting `host:port`, a trailing
  * `/v1`, or a trailing `/v1/`. All three forms resolve to the same
  * normalized base URL, always ending in `/v1`.
  */
 export function normalize(input: string): string {
-  const withScheme = /^https?:\/\//i.test(input) ? input : `http://${input}`;
-  const url = new URL(withScheme);
+  const url = new URL(coerceScheme(input));
 
   let pathname = url.pathname.replace(/\/+$/, "");
   if (pathname.endsWith("/v1")) {
@@ -60,6 +63,22 @@ export function normalize(input: string): string {
   }
 
   return `${url.origin}${pathname}/v1`;
+}
+
+/**
+ * True when `input`, after the same scheme-coercion `normalize` applies, is
+ * a parseable URL with no explicit port (WHATWG `new URL(...).port === ""`)
+ * — e.g. the unedited `http://localhost:` prefill in the URL-prompting shell
+ * flow (R2-013). Deliberately returns `false` for genuinely unparseable
+ * input too: that case is `normalize()`'s own R3-002 error to report, not
+ * this check's.
+ */
+export function missingPort(input: string): boolean {
+  try {
+    return new URL(coerceScheme(input)).port === "";
+  } catch {
+    return false;
+  }
 }
 
 function errorMessage(err: unknown): string {

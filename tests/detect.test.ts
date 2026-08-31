@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { isLocalHost, normalize, probe, probeAll, type FetchLike } from "../extensions/local-models/detect.ts";
+import { isLocalHost, missingPort, normalize, probe, probeAll, type FetchLike } from "../extensions/local-models/detect.ts";
 
 describe("normalize", () => {
   it("normalizes a bare host:port to a base URL ending in /v1", () => {
@@ -159,6 +159,25 @@ describe("isLocalHost", () => {
 
   it("treats an unparsable baseUrl as NOT local rather than throwing", () => {
     expect(isLocalHost("not a url")).toBe(false);
+  });
+});
+
+describe("missingPort", () => {
+  it("flags a scheme-ful URL with no explicit port, e.g. the unedited http://localhost: prefill (R2-013)", () => {
+    expect(missingPort("http://localhost:")).toBe(true);
+    expect(missingPort("http://localhost")).toBe(true);
+  });
+
+  it("accepts a scheme-ful URL with an explicit port", () => {
+    expect(missingPort("http://localhost:8080")).toBe(false);
+  });
+
+  it("applies the same scheme-coercion as normalize for a bare host:port", () => {
+    expect(missingPort("localhost:8080")).toBe(false);
+  });
+
+  it("does not flag unparseable input — normalize()'s own R3-002 error covers that case instead", () => {
+    expect(missingPort("::::not a url")).toBe(false);
   });
 });
 
