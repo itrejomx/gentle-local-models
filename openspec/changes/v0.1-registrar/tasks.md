@@ -79,6 +79,8 @@ Greenfield package + 5 pure core modules + shell + UI wrappers, each with paired
 - [x] 8.4 GREEN `index.ts` `prune`.
 
 ## Phase 9: Docs & final verification
-- [ ] 9.1 `extensions/local-models/README.md`: dev loop — symlink, `/reload` (D7).
-- [ ] 9.2 `tests/MANUAL-E2E.md`: checklist — mlx-serve `:11234`, llama-swap `:8080`, then `/model` + `pi --list-models`.
-- [ ] 9.3 Full `npx vitest run` green; confirm only `~/.pi/agent/models.json` (+ rotating `.bak`s) and `~/.pi/agent/gentle-local-models.json` are ever written (ADR-0001).
+- [x] 9.1 `extensions/local-models/README.md`: dev loop — symlink, `/reload` (D7). Also documents `LLAMA_SWAP_CONFIG_PATH`'s real default (`~/.llama-swap/config.yaml`) and override, `servingMode`'s length-based heuristic as inferred-not-fact (R2-005/R3-018), `capabilities`'s additive-positive-signal semantics (R3-019), oversized-`contextWindow` symptoms mapped to the verificado/declarado/placeholder labels (PRD P2), and `prune`'s hostname-based local-Provider scope.
+- [x] 9.2 `tests/MANUAL-E2E.md`: checklist — start mlx-serve `:11234`/llama-swap `:8080`, `add`, context-prompt behavior (R3-016), reasoning-confirm behavior (R3-015), Provider visibility in `/model`/`pi --list-models`/`/gentle:models`, `list`/`prune` happy paths, backup verification, ADR-0001 scope check.
+- [x] 9.3 Full `npx vitest run` green (175/175, 12 test files); `npx tsc --noEmit` clean (exit 0). ADR-0001 write-scope audit: grepped `extensions/` for every fs write call — `ports.ts` is the only file importing `node:fs/promises`; its two real-port path builders (`modelsJsonPath()`, `stateJsonPath()`) are hardcoded to `~/.pi/agent/models.json` and `~/.pi/agent/gentle-local-models.json` and are never called with any other path. Confirmed writable surface: `models.json` (atomic tmp+rename), its `.<epoch>[-<suffix>].bak` rotating siblings (also atomic tmp+rename, capped at 10), their `.tmp-<pid>-<n>` scratch files, and `gentle-local-models.json` (direct write, no backup). No write call anywhere touches `~/.pi/gentle-ai/models.json`, `models.export.json`, or `subagents.json`. PASS.
+
+## Status: 28/28 tasks complete (Phases 0-9). v0.1 Registrar (R1-R4) fully implemented, tested, and documented.
