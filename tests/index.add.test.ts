@@ -605,6 +605,32 @@ describe("add — batched reasoning confirm across family-matched models (v0.1.1
   });
 });
 
+describe("add — vendor-prefixed llama-swap ids join the batched reasoning confirm (fix/family-token-match)", () => {
+  it("accept: mtplx-qwen38-27b-uncensored-4bit is proposed and written with reasoning:true + thinkingFormat qwen, while its -nothink sibling stays excluded", async () => {
+    const ctx = fakeCtx();
+    ctx.confirm.mockResolvedValue(true);
+    const ports = basePorts({
+      fetch: reachableFetch(["mtplx-qwen38-27b-uncensored-4bit", "mtplx-qwen38-27b-uncensored-4bit-nothink"]),
+    });
+
+    await add("localhost:11234", ctx, ports);
+
+    expect(ctx.confirm).toHaveBeenCalledWith(
+      expect.stringContaining("reasoning"),
+      expect.stringContaining("mtplx-qwen38-27b-uncensored-4bit → qwen"),
+    );
+    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
+    const models: Array<{ id: string; reasoning?: boolean; compat?: { thinkingFormat?: string } }> = written.providers["mlx-serve"].models;
+    expect(models.find((m) => m.id === "mtplx-qwen38-27b-uncensored-4bit")).toMatchObject({
+      reasoning: true,
+      compat: { thinkingFormat: "qwen" },
+    });
+    const nothinkModel = models.find((m) => m.id === "mtplx-qwen38-27b-uncensored-4bit-nothink");
+    expect(nothinkModel?.reasoning).toBeUndefined();
+    expect(nothinkModel?.compat).toBeUndefined();
+  });
+});
+
 describe("add — re-add merges into existing state (R3-017)", () => {
   it("preserves the first run's ModelLabel entries and updates the server record in place, not duplicated", async () => {
     const ctx = fakeCtx();

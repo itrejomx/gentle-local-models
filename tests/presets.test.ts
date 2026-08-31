@@ -130,3 +130,32 @@ describe("matchedFamily (R3-015)", () => {
     expect(matchedFamily("llama-3.1-8b")).toBeUndefined();
   });
 });
+
+describe("matchedFamily/thinking — token match on any '-'/'_'-delimited segment (fix/family-token-match)", () => {
+  it("matches a vendor-prefixed llama-swap id where the family is a middle token, not the leading one", () => {
+    expect(matchedFamily("mtplx-qwen38-27b-uncensored-4bit")).toBe("qwen");
+    expect(thinking("mtplx-qwen38-27b-uncensored-4bit", true)).toBe("qwen");
+  });
+
+  it("still returns undefined when no token starts with a known family prefix", () => {
+    expect(matchedFamily("mtplx-ornith15-35b-a3b")).toBeUndefined();
+    expect(thinking("mtplx-ornith15-35b-a3b", true)).toBeUndefined();
+  });
+
+  it("keeps unchanged behavior for a bare basename match (org/… id, single leading token)", () => {
+    expect(matchedFamily("zai-org/glm-4.7-flash")).toBe("glm");
+    expect(thinking("zai-org/glm-4.7-flash", true)).toBe("zai");
+    expect(matchedFamily("unsloth/qwen3.6-27b")).toBe("qwen");
+    expect(thinking("unsloth/qwen3.6-27b", true)).toBe("qwen");
+  });
+
+  it("does not match across underscore-joined tokens that merely contain a longer family-unrelated word", () => {
+    expect(matchedFamily("Kwaipilot_KAT-Coder-V2.5-Dev-Q8_0")).toBeUndefined();
+    expect(thinking("Kwaipilot_KAT-Coder-V2.5-Dev-Q8_0", true)).toBeUndefined();
+  });
+
+  it("accepted trade-off: a 'qwen' token anywhere in the id matches, even in a non-qwen finetune name — opt-in via the batched confirm, not silent", () => {
+    expect(matchedFamily("not-a-qwen-finetune")).toBe("qwen");
+    expect(thinking("not-a-qwen-finetune", true)).toBe("qwen");
+  });
+});
