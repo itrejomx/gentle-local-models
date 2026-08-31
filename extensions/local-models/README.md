@@ -57,6 +57,43 @@ Both paths resolve to the same `extensions/local-models/index.ts` entry point.
 
 ## Known v0.1 limitations (read before debugging)
 
+### Server kind is auto-detected but still a real choice (v0.1.1)
+
+`add` preselects the Server-kind picker from `/v1/models`' `owned_by` field
+(`llama-swap`, `mtplx`, `mlx-serve`, `omlx` map to their matching kind;
+anything else — including a missing `owned_by` — falls back to `generic`,
+shown first in the list). The picker still opens and any kind can be picked
+instead; cancelling aborts registration exactly as before.
+
+### Context-window and reasoning prompts are batched per `add` run (v0.1.1)
+
+Registering a Server with many models used to prompt once per model for both
+`contextWindow` and reasoning confirmation — on a 25-model Server that meant
+dozens of dialogs in a row. As of v0.1.1:
+
+- **contextWindow**: every model still gets resolved from the same source
+  chain first (`verificado`, unchanged). If any are left unresolved, ONE
+  picker appears — `32k`, `64k`, `128k`, `192k`, `256k`, or `Custom…`
+  (prefilled `32768`, editable) — and the chosen value applies to every
+  unresolved model, labeled `declarado`. Cancelling, or an invalid `Custom…`
+  answer, falls back to `placeholder` for all of them (same as before).
+- **reasoning**: a Server-declared capability is still verified directly, no
+  prompt. A model id containing `nothink` (case-insensitive) is now
+  auto-declined — no prompt, reported in its own notice — since it explicitly
+  signals a non-thinking variant. Every remaining family-matched model is
+  offered in ONE confirm ("Mark N models as reasoning models with
+  thinkingFormat per family? ..."); accepting sets `reasoning` and
+  `thinkingFormat` on all of them, declining sets neither on any of them.
+
+**Removed in this batching**: the per-model `thinkingFormat` override editor
+that used to follow each individual reasoning confirm. In v0.1.1 there is no
+way to pick a `thinkingFormat` other than the family heuristic through
+`add` — accept applies the heuristic to every candidate, decline applies it
+to none. To use a different value today, edit `models.json` by hand after
+registration (fill-never-overwrite will never touch it again once set). A
+v0.2 refinement is planned to reintroduce a per-model override, most likely
+via a targeted re-add of a single model.
+
 ### `LLAMA_SWAP_CONFIG_PATH`
 
 `context.ts`'s third context-resolution source reads llama-swap's own

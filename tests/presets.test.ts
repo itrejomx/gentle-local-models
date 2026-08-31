@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { matchedFamily, provider, thinking, type ServerKind } from "../extensions/local-models/presets.ts";
+import { kindFromOwnedBy, matchedFamily, provider, thinking, type ServerKind } from "../extensions/local-models/presets.ts";
 
 describe("provider", () => {
   const kinds: ServerKind[] = ["mtplx", "omlx", "mlx-serve", "llama-swap", "generic"];
@@ -73,6 +73,32 @@ describe("thinking", () => {
 
   it("does not overmatch a family name appearing mid-id via substring", () => {
     expect(thinking("Kwaipilot_KAT-Coder-V2.5-Dev-Q8_0", true)).toBeUndefined();
+  });
+});
+
+describe("kindFromOwnedBy — Server-kind auto-detect from /v1/models owned_by (v0.1.1 hotfix item 3a)", () => {
+  it("maps llama-swap's declared owned_by to the llama-swap kind", () => {
+    expect(kindFromOwnedBy("llama-swap")).toBe("llama-swap");
+  });
+
+  it("maps mtplx's declared owned_by to the mtplx kind", () => {
+    expect(kindFromOwnedBy("mtplx")).toBe("mtplx");
+  });
+
+  it("maps mlx-serve's declared owned_by to the mlx-serve kind", () => {
+    expect(kindFromOwnedBy("mlx-serve")).toBe("mlx-serve");
+  });
+
+  it("maps omlx's declared owned_by to the omlx kind", () => {
+    expect(kindFromOwnedBy("omlx")).toBe("omlx");
+  });
+
+  it("falls back to generic for an unrecognized owned_by value", () => {
+    expect(kindFromOwnedBy("vllm")).toBe("generic");
+  });
+
+  it("falls back to generic when owned_by is absent", () => {
+    expect(kindFromOwnedBy(undefined)).toBe("generic");
   });
 });
 

@@ -37,6 +37,18 @@ ports.
 - GIVEN a Server that does not respond within 1 s, WHEN probed, THEN it is
   shown as "not detected" with the last error.
 
+### Requirement: Server kind is auto-detected but still user-confirmed
+The system MUST preselect the Server-kind picker from the probed Server's
+`/v1/models` `owned_by` field (`llama-swap`, `mtplx`, `mlx-serve`, `omlx`
+map to their matching kind; anything else, including a missing value, maps
+to `generic`), showing the detected kind first in the picker. The picker
+MUST remain a real choice — the user MAY select a different kind — and
+cancelling it MUST abort registration exactly as before.
+
+#### Scenario: owned_by detected and preselected
+- GIVEN a Server whose `/v1/models` response declares `owned_by: "llama-swap"`,
+  WHEN `add` probes it, THEN the Server-kind picker shows `llama-swap` first.
+
 ### Requirement: Warn on omlx/mtplx-rewritten Provider keys
 The system MUST warn immediately during `add` when the target Provider key is
 one that `omlx launch pi` or `mtplx start pi` would rewrite.

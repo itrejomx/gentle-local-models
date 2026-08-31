@@ -82,3 +82,22 @@ export function thinking(
 export function matchedFamily(modelId: string): string | undefined {
   return matchFamilyPrefix(modelId)?.[0];
 }
+
+// v0.1.1 hotfix item 3a: maps a Server's /v1/models `owned_by` field to a
+// ServerKind for `add`'s kind auto-detect. Data-driven (R3): any owned_by
+// value outside this known set — including a missing one — falls back to
+// "generic" rather than guessing.
+const OWNED_BY_KIND: Readonly<Record<string, ServerKind>> = {
+  "llama-swap": "llama-swap",
+  mtplx: "mtplx",
+  "mlx-serve": "mlx-serve",
+  omlx: "omlx",
+};
+
+/** Maps a probed Server's `owned_by` value to the ServerKind `add` preselects. */
+export function kindFromOwnedBy(ownedBy: string | undefined): ServerKind {
+  if (ownedBy === undefined) {
+    return "generic";
+  }
+  return OWNED_BY_KIND[ownedBy] ?? "generic";
+}

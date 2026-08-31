@@ -25,14 +25,23 @@ only the prompt answer (source 4) MUST be labeled `declarado`.
   `config.yaml` is how llama-swap was actually launched and a later v0.2
   Check can re-read it to detect drift.
 
-### Requirement: Ask-at-registration prompt
-When no source resolves interactively, the system MUST prompt per model,
-pre-filled with a conservative `32768`, editable by the user; the resulting
-value MUST be labeled `declarado`, never `verificado`.
+### Requirement: Ask-at-registration prompt is batched, not per model
+When one or more models have no resolvable source, the system MUST prompt
+ONCE per `add` run for all of them together — a preset picker (32k, 64k,
+128k, 192k, 256k, or a "Custom…" entry prefilled with a conservative
+`32768` and editable) — instead of one dialog per model. The chosen value
+MUST apply to every unresolved model and MUST be labeled `declarado`, never
+`verificado`; a model that already resolved (or already has a recorded
+`contextWindow`) is never included in this prompt.
 
-#### Scenario: User accepts the pre-filled default
-- GIVEN no resolvable source, WHEN the user accepts `32768` unedited, THEN
-  `contextWindow` is set to `32768` and labeled `declarado`.
+#### Scenario: User picks a preset for all unresolved models
+- GIVEN two models with no resolvable source, WHEN the user picks the `128k`
+  preset, THEN both models get `contextWindow: 131072`, labeled `declarado`.
+
+#### Scenario: User accepts the Custom default
+- GIVEN no resolvable source, WHEN the user picks "Custom…" and accepts
+  `32768` unedited, THEN `contextWindow` is set to `32768` and labeled
+  `declarado`.
 
 ### Requirement: Non-interactive fallback omits contextWindow
 In a non-interactive invocation, when no source resolves, the system MUST
