@@ -1,0 +1,163 @@
+// Integration layer (D3, D-001): exercises `commit()` against a REAL
+// filesystem under `os.tmpdir()`. Unlike models-writer.test.ts (stubbed
+// WriterPorts), this proves the backup file actually lands on disk before
+// any change, that a real round trip never overwrites an existing field, and
+// that a verifyWritten failure genuinely restores the newest on-disk backup
+// — never `~/.pi/agent/models.json`, never any gentle-ai file.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, readdir, readFile, rename, rm, unlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, dirname, join } from "node:path";
+import { commit, type WriterPorts } from "../extensions/local-models/models-writer.ts";
+
+// Wraps (not replaces) node:fs/promises.rename so the atomic-write test below
+// can observe real rename calls — ESM module namespaces aren't configurable,
+// so vi.spyOn can't touch a built-in directly; vi.mock's factory can.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, rename: vi.fn(actual.rename) };
+});
+
+let tmpFileCounter = 0;
+
+function realFsPorts(now: () => number, verify: WriterPorts["verifyWritten"]): WriterPorts {
+  return {
+    async readFile(path: string) {
+      try {
+        return await readFile(path, "utf-8");
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+          return undefined;
+        }
+        throw error;
+      }
+    },
+    // Reference implementation of the atomicity contract documented on
+    // WriterPorts.writeFile (D4): write to a temp file in the same
+    // directory, then rename into place, so `path` is never observed with
+    // partial content and Phase 7's real shell port has this to copy.
+    async writeFile(path: string, contents: string) {
+      const tmpPath = `${path}.tmp-${process.pid}-${tmpFileCounter++}`;
+      await writeFile(tmpPath, contents, "utf-8");
+      await rename(tmpPath, path);
+    },
+    async deleteFile(path: string) {
+      await unlink(path);
+    },
+    async listBackups(path: string) {
+      const dir = dirname(path);
+      const base = basename(path);
+      const entries = await readdir(dir);
+      return entries.filter((e) => e.startsWith(`${base}.`) && e.endsWith(".bak")).map((e) => join(dir, e));
+    },
+    now,
+    verifyWritten: verify,
+  };
+}
+
+const alwaysOk: WriterPorts["verifyWritten"] = async () => ({ ok: true });
+
+let dir: string;
+let modelsPath: string;
+
+beforeEach(async () => {
+  dir = await mkdtemp(join(tmpdir(), "gentle-local-models-test-"));
+  modelsPath = join(dir, "models.json");
+});
+
+afterEach(async () => {
+  await rm(dir, { recursive: true, force: true });
+});
+
+describe("commit — real filesystem integration (D-001, D3)", () => {
+  it("writes a models.json.<epoch>.bak backup to disk before changing an existing file", async () => {
+    const original = JSON.stringify({ providers: { lmstudio: { models: [{ id: "m1", name: "m1" }] } } });
+    await writeFile(modelsPath, original, "utf-8");
+    const ports = realFsPorts(() => 1000, alwaysOk);
+
+    const outcome = await commit(ports, modelsPath, "lmstudio", { models: [{ id: "m2" }] });
+
+    expect(outcome.kind).toBe("written");
+    const backupPath = `${modelsPath}.1000.bak`;
+    const backupContents = await readFile(backupPath, "utf-8");
+    expect(backupContents).toBe(original);
+  });
+
+  it("never overwrites an existing field on a real round trip through disk", async () => {
+    const original = JSON.stringify({
+      providers: { lmstudio: { models: [{ id: "m1", name: "m1", contextWindow: 131072 }] } },
+    });
+    await writeFile(modelsPath, original, "utf-8");
+    const ports = realFsPorts(() => 2000, alwaysOk);
+
+    await commit(ports, modelsPath, "lmstudio", { models: [{ id: "m1", contextWindow: 999999 }] });
+
+    const finalContents = JSON.parse(await readFile(modelsPath, "utf-8"));
+    expect(finalContents.providers.lmstudio.models[0].contextWindow).toBe(131072);
+  });
+
+  it("caps rotating backups at 10 real files on disk, pruning the oldest", async () => {
+    await writeFile(modelsPath, JSON.stringify({ providers: {} }), "utf-8");
+    for (let epoch = 1; epoch <= 10; epoch++) {
+      await writeFile(`${modelsPath}.${epoch}.bak`, `pre-existing-backup-${epoch}`, "utf-8");
+    }
+    const ports = realFsPorts(() => 11, alwaysOk);
+
+    await commit(ports, modelsPath, "lmstudio", { models: [{ id: "m1" }] });
+
+    const entries = await readdir(dir);
+    const backups = entries.filter((e) => e.endsWith(".bak"));
+    expect(backups).toHaveLength(10);
+    expect(backups).not.toContain("models.json.1.bak");
+    expect(backups).toContain("models.json.11.bak");
+  });
+
+  it("auto-restores the newest on-disk backup when verifyWritten fails, leaving models.json as it was", async () => {
+    const original = JSON.stringify({ providers: { lmstudio: { models: [{ id: "m1", name: "m1" }] } } });
+    await writeFile(modelsPath, original, "utf-8");
+    const failingVerify: WriterPorts["verifyWritten"] = async () => ({ ok: false, error: "empty provider map" });
+    const ports = realFsPorts(() => 3000, failingVerify);
+
+    const outcome = await commit(ports, modelsPath, "lmstudio", { models: [{ id: "m2" }] });
+
+    expect(outcome).toEqual({
+      kind: "restored",
+      path: `${modelsPath}.3000.bak`,
+      error: "empty provider map",
+      verification: { ok: false, error: "empty provider map" },
+    });
+    const restoredContents = await readFile(modelsPath, "utf-8");
+    expect(restoredContents).toBe(original);
+  });
+
+  it("rolls back to 'no file' when verifyWritten fails on the very first write (no backup exists to restore)", async () => {
+    const ports = realFsPorts(() => 4000, async () => ({ ok: false, error: "empty provider map" }));
+
+    const outcome = await commit(ports, modelsPath, "lmstudio", { models: [{ id: "m1" }] });
+
+    expect(outcome).toEqual({ kind: "rolled-back", error: "empty provider map" });
+    await expect(readFile(modelsPath, "utf-8")).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("writes the main file atomically via a temp file + rename, never exposing a partial-content window (D4)", async () => {
+    const original = JSON.stringify({ providers: { lmstudio: { models: [{ id: "m1", name: "m1" }] } } });
+    await writeFile(modelsPath, original, "utf-8");
+    const ports = realFsPorts(() => 5000, alwaysOk);
+    const renameMock = vi.mocked(rename);
+    renameMock.mockClear();
+
+    const outcome = await commit(ports, modelsPath, "lmstudio", { models: [{ id: "m2" }] });
+
+    expect(outcome.kind).toBe("written");
+    const mainWriteRename = renameMock.mock.calls.find(([, dest]) => dest === modelsPath);
+    expect(mainWriteRename).toBeDefined();
+    expect(mainWriteRename?.[0]).not.toBe(modelsPath); // renamed FROM a distinct temp path
+
+    const finalContents = JSON.parse(await readFile(modelsPath, "utf-8"));
+    expect(finalContents.providers.lmstudio.models.map((m: { id: string }) => m.id)).toEqual(["m1", "m2"]);
+
+    // No leftover temp files once the atomic write completes.
+    const entries = await readdir(dir);
+    expect(entries.some((e) => e.includes(".tmp-"))).toBe(false);
+  });
+});

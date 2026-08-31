@@ -43,42 +43,44 @@ Greenfield package + 5 pure core modules + shell + UI wrappers, each with paired
 - [x] 0.5 GREEN fix assertion; `npx vitest run` → pass. Gate established.
 
 ## Phase 1: detect.ts (R1)
-- [ ] 1.1 RED `tests/detect.test.ts`: host:port/`/v1`/`/v1/` normalize equal; probe ≤1s; 200+empty-models = failure; unreachable → last error.
-- [ ] 1.2 GREEN `detect.ts`: `normalize()`, `probe(fetch, ms)`, `probeAll(urls)` (feeds D-004).
+- [x] 1.1 RED `tests/detect.test.ts`: host:port/`/v1`/`/v1/` normalize equal; probe ≤1s; 200+empty-models = failure; unreachable → last error.
+- [x] 1.2 GREEN `detect.ts`: `normalize()`, `probe(fetch, ms)`, `probeAll(urls)` (feeds D-004).
 
 ## Phase 2: presets.ts (R3)
-- [ ] 2.1 RED `tests/presets.test.ts`: table for mtplx/omlx/mlx-serve/llama-swap/generic; heuristic qwen→qwen, glm→zai, deepseek→deepseek, else omit; mixed-family server; no Provider-level thinkingFormat.
-- [ ] 2.2 GREEN `presets.ts`: `provider(kind)` + `thinking(model)` + pre-write override.
+- [x] 2.1 RED `tests/presets.test.ts`: table for mtplx/omlx/mlx-serve/llama-swap/generic; heuristic qwen→qwen, glm→zai, deepseek→deepseek, else omit; mixed-family server; no Provider-level thinkingFormat.
+- [x] 2.2 GREEN `presets.ts`: `provider(kind)` + `thinking(model)` + pre-write override.
 
 ## Phase 3: context.ts (R4, D-003)
-- [ ] 3.1 RED `tests/context.test.ts`: chain `/v1/models`→`/props`→config.yaml `--ctx-size` (injected fs port), all `verificado`; no source → `{kind:"unresolved"}`, never prompts.
-- [ ] 3.2 GREEN `context.ts`: `resolve(model, sources, ports)`; no `ctx`/`ui` import — core stays pure.
+- [x] 3.1 RED `tests/context.test.ts`: chain `/v1/models`→`/props`→config.yaml `--ctx-size` (injected fs port), all `verificado`; no source → `{kind:"unresolved"}`, never prompts.
+- [x] 3.2 GREEN `context.ts`: `resolve(model, sources, ports)`; no `ctx`/`ui` import — core stays pure.
 
 ## Phase 4: state.ts (D-002)
-- [ ] 4.1 RED `tests/state.test.ts`: `PluginState` load/save incl. owner/lastError/model labels; default owner `unknown`; lastError update path (feeds D-004).
-- [ ] 4.2 GREEN `state.ts`: read/write `gentle-local-models.json` via injected fs port only.
+- [x] 4.1 RED `tests/state.test.ts`: `PluginState` load/save incl. owner/lastError/model labels; default owner `unknown`; lastError update path (feeds D-004).
+- [x] 4.2 GREEN `state.ts`: read/write `gentle-local-models.json` via injected fs port only.
 
 ## Phase 5: models-writer.ts (R2, D-001)
-- [ ] 5.1 RED unit `tests/models-writer.test.ts`: fill-never-overwrite; comment guard refuses+reports; invalid mirror-schema blocks write, file untouched; unknown compat key warns, doesn't block; backup rotation caps at 10. Fixture carries real `lmstudio` block.
-- [ ] 5.2 GREEN unit: merge/guard/validate/lint/rotation against `WriterPorts`.
-- [ ] 5.3 RED integration `tests/models-writer.integration.test.ts` (`os.tmpdir()`): `models.json.<epoch>.bak` written before change (permitted write, D-001); no field overwritten; `verifyWritten()` failure auto-restores newest backup.
-- [ ] 5.4 GREEN integration: `commit()` — read→guard→merge→validate→backup→write→verifyWritten→restore.
+- [x] 5.1 RED unit `tests/models-writer.test.ts`: fill-never-overwrite; comment guard refuses+reports; invalid mirror-schema blocks write, file untouched; unknown compat key warns, doesn't block; backup rotation caps at 10. Fixture carries real `lmstudio` block.
+- [x] 5.2 GREEN unit: merge/guard/validate/lint/rotation against `WriterPorts`.
+- [x] 5.3 RED integration `tests/models-writer.integration.test.ts` (`os.tmpdir()`): `models.json.<epoch>.bak` written before change (permitted write, D-001); no field overwritten; `verifyWritten()` failure auto-restores newest backup.
+- [x] 5.4 GREEN integration: `commit()` — read→guard→merge→validate→backup→write→verifyWritten→restore.
 
 ## Phase 6: ui/*.ts wrappers
-- [ ] 6.1 RED `tests/ui.test.ts`: SelectList/SettingsList/BorderedLoader pass through to mocked `ctx.ui` unchanged.
-- [ ] 6.2 GREEN `ui/*.ts`: thin wrappers, no business logic.
+- [x] 6.1 RED `tests/ui.test.ts`: SelectList/SettingsList/BorderedLoader pass through to mocked `ctx.ui` unchanged.
+- [x] 6.2 GREEN `ui/*.ts`: thin wrappers, no business logic.
 
 ## Phase 7: index.ts — add (D-003, D-005, D-006, D-007)
-- [ ] 7.1 RED `tests/index.add.test.ts`: normalize→probe→kind select (warn omlx/mtplx-rewritten key)→presets.provider; `context.resolve` called ONLY for models missing `contextWindow` (D-005, preserved value never relabeled); `unresolved`+interactive→`ctx.ui.editor(title,"32768")` accepted→`declarado` (D-006); editor cancel(undefined)→omit+`placeholder`+warn (D-007), same path as non-interactive; thinking proposal w/ override; commit()+state.save().
-- [ ] 7.2 GREEN `index.ts` `add`, guarding `context.resolve` call per D-005.
+- [x] 7.1 RED `tests/index.add.test.ts`: normalize→probe→kind select (warn omlx/mtplx-rewritten key)→presets.provider; `context.resolve` called ONLY for models missing `contextWindow` (D-005, preserved value never relabeled); `unresolved`+interactive→`ctx.ui.editor(title,"32768")` accepted→`declarado` (D-006); editor cancel(undefined)→omit+`placeholder`+warn (D-007), same path as non-interactive; thinking proposal w/ override; commit()+state.save().
+- [x] 7.2 GREEN `index.ts` `add`, guarding `context.resolve` call per D-005.
 
 ## Phase 8: index.ts — list + prune (D-004)
-- [ ] 8.1 RED `tests/index.list.test.ts`: base URLs = models.json Providers ∪ state.servers (deduped); each probed; failures render "not detected" + last error; state.lastError updated.
-- [ ] 8.2 GREEN `index.ts` `list` via `detect.probeAll` + `state.ts`.
-- [ ] 8.3 RED `tests/index.prune.test.ts`: any local Provider incl. external; ownership per row; ONE confirmation per run; backup before any change.
-- [ ] 8.4 GREEN `index.ts` `prune`.
+- [x] 8.1 RED `tests/index.list.test.ts`: base URLs = models.json Providers ∪ state.servers (deduped); each probed; failures render "not detected" + last error; state.lastError updated.
+- [x] 8.2 GREEN `index.ts` `list` via `detect.probeAll` + `state.ts`.
+- [x] 8.3 RED `tests/index.prune.test.ts`: any local Provider incl. external; ownership per row; ONE confirmation per run; backup before any change.
+- [x] 8.4 GREEN `index.ts` `prune`.
 
 ## Phase 9: Docs & final verification
-- [ ] 9.1 `extensions/local-models/README.md`: dev loop — symlink, `/reload` (D7).
-- [ ] 9.2 `tests/MANUAL-E2E.md`: checklist — mlx-serve `:11234`, llama-swap `:8080`, then `/model` + `pi --list-models`.
-- [ ] 9.3 Full `npx vitest run` green; confirm only `~/.pi/agent/models.json` (+ rotating `.bak`s) and `~/.pi/agent/gentle-local-models.json` are ever written (ADR-0001).
+- [x] 9.1 `extensions/local-models/README.md`: dev loop — symlink, `/reload` (D7). Also documents `LLAMA_SWAP_CONFIG_PATH`'s real default (`~/.llama-swap/config.yaml`) and override, `servingMode`'s length-based heuristic as inferred-not-fact (R2-005/R3-018), `capabilities`'s additive-positive-signal semantics (R3-019), oversized-`contextWindow` symptoms mapped to the verificado/declarado/placeholder labels (PRD P2), and `prune`'s hostname-based local-Provider scope.
+- [x] 9.2 `tests/MANUAL-E2E.md`: checklist — start mlx-serve `:11234`/llama-swap `:8080`, `add`, context-prompt behavior (R3-016), reasoning-confirm behavior (R3-015), Provider visibility in `/model`/`pi --list-models`/`/gentle:models`, `list`/`prune` happy paths, backup verification, ADR-0001 scope check.
+- [x] 9.3 Full `npx vitest run` green (175/175, 12 test files); `npx tsc --noEmit` clean (exit 0). ADR-0001 write-scope audit: grepped `extensions/` for every fs write call — `ports.ts` is the only file importing `node:fs/promises`; its two real-port path builders (`modelsJsonPath()`, `stateJsonPath()`) are hardcoded to `~/.pi/agent/models.json` and `~/.pi/agent/gentle-local-models.json` and are never called with any other path. Confirmed writable surface: `models.json` (atomic tmp+rename), its `.<epoch>[-<suffix>].bak` rotating siblings (also atomic tmp+rename, capped at 10), their `.tmp-<pid>-<n>` scratch files, and `gentle-local-models.json` (direct write, no backup). No write call anywhere touches `~/.pi/gentle-ai/models.json`, `models.export.json`, or `subagents.json`. PASS.
+
+## Status: 28/28 tasks complete (Phases 0-9). v0.1 Registrar (R1-R4) fully implemented, tested, and documented.

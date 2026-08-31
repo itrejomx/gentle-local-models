@@ -59,7 +59,14 @@ seeds real editable text (`interactive-mode.js:2069-2071`).
 ### D6 — Errors are values; only two conditions abort
 **Choice**: core returns discriminated results; the shell maps them to `ctx.ui.notify`.
 `WriteOutcome` = `written` | `refused` (comments) | `invalid` (pre-write, file untouched) |
-`restored` (read-back failed, backup restored). Lint warnings ride along with `written`.
+`restored` (read-back failed, backup restored, re-verified) | `rolled-back` (read-back
+failed, no backup existed) | `restore-failed` (read-back failed, restore itself failed —
+failed write left in place, reported honestly) | `write-failed` (an injected port itself
+rejected mid-stage; names the stage and the file state left behind). Lint warnings ride
+along with `written`. PR6 review split the original single ambiguous `restored` variant
+(which used a `backup: ""` sentinel to mean "nothing was restored") into these distinct,
+type-level-discriminated kinds, and wrapped every port call so no thrown exception can
+leave `models.json` half-written or escape `commit()` unconverted.
 **Rationale**: no thrown exception can leave `models.json` half-written; every abort names
 the file state it left behind.
 
@@ -137,15 +144,21 @@ interface PluginState {           // ~/.pi/agent/gentle-local-models.json
 }
 
 type WriteOutcome =
-  | { kind: "written";  backup: string; lint: string[] }
+  | { kind: "written";  backup?: string; lint: string[] }
   | { kind: "refused";  reason: "comments" }
-  | { kind: "invalid";  errors: string[] }                 // file untouched
-  | { kind: "restored"; backup: string; error: string };   // read-back failed
+  | { kind: "invalid";  errors: string[]; backups: string[] } // file untouched; backups offered for recovery (D4c)
+  | { kind: "restored"; path: string; error: string;       // a backup was restored; `verification`
+      verification: { ok: true } | { ok: false; error: string } } // is a SECOND verifyWritten (D3)
+  | { kind: "rolled-back"; error: string }                 // no backup existed; rolled back to "no file"
+  | { kind: "restore-failed"; path: string; reason: string; error: string } // restore itself failed; failed write left in place
+  | { kind: "write-failed"; stage: "read" | "rotate-backups" | "restore";  // an injected port itself
+      error: string; fileState: "untouched" | "unverified-write"; backup?: string }; // rejected/threw (C)
 
 interface WriterPorts {           // injected — makes the writer unit-testable
   readFile(p: string): Promise<string | undefined>;
-  writeFile(p: string, s: string): Promise<void>;
-  listBackups(): Promise<string[]>;
+  writeFile(p: string, s: string): Promise<void>;   // MUST be atomic: write-temp + rename (D4)
+  deleteFile(p: string): Promise<void>;
+  listBackups(p: string): Promise<string[]>;
   now(): number;
   verifyWritten(providerKey: string, modelIds: string[]): Promise<{ ok: true } | { ok: false; error: string }>;
 }
@@ -159,6 +172,17 @@ interface WriterPorts {           // injected — makes the writer unit-testable
 | Unit | merge fill-never-overwrite, comment guard, mirror validate, lint, backup rotation cap 10 | vitest + `WriterPorts` fakes; fixture `models.json` carrying the real `lmstudio` block |
 | Integration | full `commit()` against a temp dir | real `fs` under `os.tmpdir()`; asserts backup exists, no field overwritten, restore on `verifyWritten` failure |
 | Manual E2E | `add` against mlx-serve `:11234` / llama-swap `:8080`, then `/model` and `pi --list-models` | documented checklist — needs a live Server and Pi runtime, not automated in v0.1 |
+
+## Known limitations
+
+- **Single-read stale window in `commit()`** (PR6 review, R4-003/R1-004): `commit()` reads
+  `models.json` once at the start of its orchestration and writes back a merge of that
+  snapshot. An external write to `models.json` landing between the read and the write is
+  clobbered, and — because the backup rotation only ever captures `commit()`'s OWN read
+  snapshot — that external write is not captured in any backup either. Accepted for v0.1:
+  the window is millisecond-scale and this is an interactively-invoked, single-user CLI
+  command, not a long-running service with concurrent writers. Revisit if a batch/scripted
+  mode (multiple concurrent `add`/`prune` invocations) arrives.
 
 ## Migration / Rollout
 
