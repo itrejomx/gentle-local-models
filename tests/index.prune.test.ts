@@ -271,6 +271,40 @@ describe("prune — any local Provider, ownership per row, Unserved Models via l
     expect(message).not.toContain("mtplx");
   });
 
+  it("never claims 'Pruned N…' when models.json is deleted between the scan and the write (R2-007)", async () => {
+    const ctx = fakeCtx();
+    const preImage = modelsJsonFile({ mtplx: { baseUrl: "http://localhost:11234/v1", models: [{ id: "gone-model" }] } });
+    let readCalls = 0;
+    const writeFile = vi.fn(async () => {});
+    const writerPorts: WriterPorts = {
+      async readFile(p: string) {
+        readCalls++;
+        // 1st call: index.ts's own pre-read (finds the file). 2nd call:
+        // commitPrune's internal read — the file vanished in between.
+        return readCalls === 1 ? preImage : undefined;
+      },
+      writeFile,
+      async deleteFile() {},
+      async listBackups() {
+        return [];
+      },
+      now: () => 1,
+      verifyWritten: async () => ({ ok: true }),
+    };
+    const ports: PrunePorts = {
+      fetch: reachableFetch({ "http://localhost:11234/v1": [] }),
+      writer: { path: MODELS_JSON_PATH, ports: writerPorts },
+      state: fakeStatePorts(),
+    };
+
+    await prune(ctx, ports);
+
+    expect(writeFile).not.toHaveBeenCalled();
+    const messages = ctx.notify.mock.calls.map((call) => `${call[0]}`);
+    expect(messages.some((m) => /^Pruned \d/.test(m))).toBe(false);
+    expect(messages.some((m) => m.includes("models.json no longer exists (deleted since the prune started)"))).toBe(true);
+  });
+
   it("never prunes non-interactively — warns naming the candidates instead of confirming", async () => {
     const ctx = fakeCtx();
     ctx.hasUI = false;

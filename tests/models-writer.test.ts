@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   hasComments,
   mergeProvider,
@@ -6,6 +6,7 @@ import {
   lint,
   rotateBackups,
   commit,
+  commitPrune,
   type ProviderInput,
   type WriterPorts,
 } from "../extensions/local-models/models-writer.ts";
@@ -596,5 +597,82 @@ describe("commit — full orchestration against stubbed WriterPorts (R2)", () =>
       verification: { ok: true },
     });
     expect(ports.files[path]).toBe(original);
+  });
+});
+
+describe("commitPrune — full orchestration against stubbed WriterPorts (R2)", () => {
+  const path = "/fake/models.json";
+
+  it("reports an honest 'invalid' outcome — NEVER 'written' — when models.json no longer exists at write time (R2-007)", async () => {
+    const priorBackup = `${path}.10.bak`;
+    let readCalls = 0;
+    const files: Record<string, string> = { [priorBackup]: "an earlier good version" };
+    const ports: WriterPorts & { files: Record<string, string> } = {
+      files,
+      async readFile(p: string) {
+        if (p === path) {
+          readCalls++;
+          // First call (the shell's pre-read): the file still exists.
+          // Second call (commitPrune's own read): it's gone — deleted out
+          // from under the prune between the initial scan and the write.
+          return readCalls === 1 ? JSON.stringify({ providers: { mtplx: { models: [{ id: "gone" }] } } }) : undefined;
+        }
+        return files[p];
+      },
+      async writeFile(p: string, contents: string) {
+        files[p] = contents;
+      },
+      async deleteFile(p: string) {
+        delete files[p];
+      },
+      async listBackups() {
+        return [priorBackup];
+      },
+      now: () => 42,
+      verifyWritten: async () => ({ ok: true }),
+    };
+    // Simulate the shell's earlier pre-read already having happened.
+    await ports.readFile(path);
+
+    const outcome = await commitPrune(ports, path, [{ providerKey: "mtplx", modelIds: ["gone"] }]);
+
+    expect(outcome).toEqual({
+      kind: "invalid",
+      errors: ["models.json no longer exists (deleted since the prune started)"],
+      backups: [priorBackup],
+    });
+  });
+
+  it("never calls writeFile when models.json is gone at write time", async () => {
+    const writeFile = vi.fn(async () => {});
+    const ports: WriterPorts = {
+      async readFile() {
+        return undefined;
+      },
+      writeFile,
+      async deleteFile() {},
+      async listBackups() {
+        return [];
+      },
+      now: () => 1,
+      verifyWritten: async () => ({ ok: true }),
+    };
+
+    await commitPrune(ports, path, [{ providerKey: "mtplx", modelIds: ["gone"] }]);
+
+    expect(writeFile).not.toHaveBeenCalled();
+  });
+
+  it("removes exactly the confirmed models and writes a single backup on a normal prune", async () => {
+    const original = JSON.stringify({
+      providers: { lmstudio: { models: [{ id: "m1", name: "m1" }, { id: "m2", name: "m2" }] } },
+    });
+    const ports = memoryPorts({ [path]: original }, { now: 5 });
+
+    const outcome = await commitPrune(ports, path, [{ providerKey: "lmstudio", modelIds: ["m2"] }]);
+
+    expect(outcome.kind).toBe("written");
+    expect(JSON.parse(ports.files[path]).providers.lmstudio.models.map((m: { id: string }) => m.id)).toEqual(["m1"]);
+    expect(ports.files[`${path}.5.bak`]).toBe(original);
   });
 });

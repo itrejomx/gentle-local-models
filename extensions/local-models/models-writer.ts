@@ -512,7 +512,8 @@ async function listBackupsSafely(ports: WriterPorts, path: string): Promise<stri
  * file state it left behind. Every port-calling stage (read, rotateBackups,
  * the main write, verifyWritten, restore) is wrapped (C): no exception from
  * an injected `WriterPorts` can escape `commit()` — every rejection resolves
- * to a `WriteOutcome` value instead.
+ * to a `WriteOutcome` value instead. See `commitPrune` below for the same
+ * guarded orchestration applied to model removal instead of merge.
  */
 export async function commit(
   ports: WriterPorts,
@@ -624,7 +625,16 @@ export async function commitPrune(ports: WriterPorts, path: string, removals: Pr
   }
 
   if (raw === undefined) {
-    return { kind: "written", lint: [] };
+    // R2-007: models.json existed when the shell scanned it (that's how
+    // `removals` got computed at all) but is gone now — NEVER report
+    // `written` here, that would tell the caller Unserved Models were
+    // removed when nothing was written at all. Reuse `invalid` (file
+    // untouched, same recovery-hint shape as every other pre-write abort).
+    return {
+      kind: "invalid",
+      errors: ["models.json no longer exists (deleted since the prune started)"],
+      backups: await listBackupsSafely(ports, path),
+    };
   }
 
   if (hasComments(raw)) {
