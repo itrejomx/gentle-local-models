@@ -407,6 +407,70 @@ describe("lint — compat-key lint warns without blocking (R2)", () => {
     expect(warnings.some((w) => w.includes("bogusKey"))).toBe(true);
     expect(validate(file)).toEqual({ ok: true });
   });
+
+  // Regression for the second live E2E's false positive: Pi's real compat
+  // schema (ProviderConfigSchema.compat / ModelDefinitionSchema.compat,
+  // @earendil-works/pi-coding-agent@0.84.4's dist/core/model-config.d.ts)
+  // accepts an IDENTICAL union of ~31 keys — including `thinkingFormat` — at
+  // BOTH the Provider and Model level. A real lmstudio setup can legitimately
+  // carry `thinkingFormat` on the Provider's own `compat` block, not only on
+  // each Model's.
+  it("does not warn on a Provider-level thinkingFormat (real lmstudio shape, Pi 0.84.4 compat schema)", () => {
+    const file = {
+      providers: {
+        lmstudio: {
+          compat: { supportsDeveloperRole: false, thinkingFormat: "qwen" },
+          models: [{ id: "m1", name: "m1" }],
+        },
+      },
+    };
+
+    expect(lint(file)).toEqual([]);
+  });
+
+  it("still warns on a truly unknown Provider-level key (typo) alongside a legit thinkingFormat", () => {
+    const file = {
+      providers: {
+        lmstudio: {
+          compat: { thinkingFormat: "qwen", supportsDeveloperRol: false },
+          models: [{ id: "m1", name: "m1" }],
+        },
+      },
+    };
+
+    const warnings = lint(file);
+
+    expect(warnings.some((w) => w.includes("supportsDeveloperRol"))).toBe(true);
+    expect(warnings.some((w) => w.includes("thinkingFormat"))).toBe(false);
+  });
+
+  it("still warns on a truly unknown Model-level key (typo)", () => {
+    const file = {
+      providers: {
+        lmstudio: {
+          models: [{ id: "m1", name: "m1", compat: { thinkingFormat: "qwen", supportsReasoningEfort: true } }],
+        },
+      },
+    };
+
+    const warnings = lint(file);
+
+    expect(warnings.some((w) => w.includes("supportsReasoningEfort"))).toBe(true);
+    expect(warnings.some((w) => w.includes("thinkingFormat"))).toBe(false);
+  });
+
+  it("the mirror TypeBox schema itself does not reject a Provider-level thinkingFormat", () => {
+    const file = {
+      providers: {
+        lmstudio: {
+          compat: { supportsDeveloperRole: false, thinkingFormat: "qwen" },
+          models: [{ id: "m1", name: "m1" }],
+        },
+      },
+    };
+
+    expect(validate(file)).toEqual({ ok: true });
+  });
 });
 
 describe("rotateBackups — rotation cap at 10 (R2)", () => {
