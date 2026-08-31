@@ -441,7 +441,21 @@ export async function list(ctx: ListContext, ports: ListPorts): Promise<void> {
   }
 
   if (nextState !== state) {
-    await saveState(ports.state, nextState);
+    // R4-007: same guard as add()'s R4-006 — the per-provider lines above
+    // are already shown and are the actual point of `list`; a
+    // rejecting/throwing StatePorts must never escape unhandled and must
+    // never silently drop the loss of this run's lastError bookkeeping.
+    try {
+      await saveState(ports.state, nextState);
+    } catch (error) {
+      notify(
+        ctx.ui,
+        `Reachability recorded in memory, but plugin bookkeeping failed (${
+          error instanceof Error ? error.message : String(error)
+        }): last-error status was not saved.`,
+        "warning",
+      );
+    }
   }
 }
 
@@ -570,7 +584,7 @@ async function realVerifyWritten(
   return { ok: true };
 }
 
-function buildAddPorts(ctx: ExtensionCommandContext): AddPorts {
+function buildCommandPorts(ctx: ExtensionCommandContext): AddPorts {
   const boundFetch = fetch as unknown as FetchLike;
   const writerPath = modelsJsonPath();
   return {
@@ -598,17 +612,17 @@ export default function localModelsExtension(pi: ExtensionAPI): void {
           ctx.ui.notify("Usage: /local-models add <baseUrl>", "error");
           return;
         }
-        await add(baseUrlInput, ctx, buildAddPorts(ctx));
+        await add(baseUrlInput, ctx, buildCommandPorts(ctx));
         return;
       }
 
       if (subcommand === "list") {
-        await list(ctx, buildAddPorts(ctx));
+        await list(ctx, buildCommandPorts(ctx));
         return;
       }
 
       if (subcommand === "prune") {
-        await prune(ctx, buildAddPorts(ctx));
+        await prune(ctx, buildCommandPorts(ctx));
         return;
       }
 

@@ -180,6 +180,35 @@ describe("list — probe failures render 'not detected' + last error, and update
     expect(saved.servers[0].lastError).toBeUndefined();
   });
 
+  it("guards state persistence — resolves and shows the per-provider line even when writeState rejects (R4-007)", async () => {
+    const ctx = fakeCtx();
+    const statePorts = fakeStatePorts({
+      version: 1,
+      piVersion: "",
+      servers: [{ baseUrl: "http://localhost:9999/v1", kind: "generic", servingMode: "single-model", providerKey: "generic", owner: "plugin", models: {} }],
+    });
+    statePorts.writeState = vi.fn(async () => {
+      throw new Error("disk full");
+    });
+    const ports: ListPorts = {
+      fetch: vi.fn(async () => {
+        throw new Error("ECONNREFUSED");
+      }) as unknown as FetchLike,
+      writer: { path: "/pi/agent/models.json", ports: fakeWriterPorts() },
+      state: statePorts,
+    };
+
+    await expect(list(ctx, ports)).resolves.toBeUndefined();
+
+    expect(ctx.notify).toHaveBeenCalledWith(expect.stringContaining("not detected"), "warning");
+    expect(ctx.notify).toHaveBeenCalledWith(
+      expect.stringContaining("Reachability recorded in memory, but plugin bookkeeping failed"),
+      "warning",
+    );
+    const messages = ctx.notify.mock.calls.map((call) => `${call[0]}`).join("\n");
+    expect(messages).toContain("last-error status was not saved");
+  });
+
   it("clears a stale state.lastError once the Server is reachable again", async () => {
     const ctx = fakeCtx();
     const statePorts = fakeStatePorts({
