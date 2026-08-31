@@ -4,6 +4,8 @@
 spec, not a delta. Scope: R1–R4 only. R5–R8 (Check, tool-calling probes,
 Serving Mode rules, export validation) are OUT — v0.2.
 
+> **Archive note**: After v0.1 implementation and verification, the five capabilities have been split into individual spec files in `openspec/specs/`. See `server-registration/spec.md`, `models-json-writer/spec.md`, `compat-presets/spec.md`, `context-resolution/spec.md`, and `plugin-state/spec.md`. The R1 zero-models requirement has been reconciled to reflect actual shipped behavior (see archive-report.md).
+
 ## Capability: server-registration (R1)
 
 ### Purpose
