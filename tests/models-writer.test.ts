@@ -118,6 +118,53 @@ describe("mergeProvider — fill-never-overwrite (R2)", () => {
     ]);
   });
 
+  it("sets api on a brand new Provider so Pi's provider composer can resolve it (v0.1.1 hotfix item 1)", () => {
+    const input: ProviderInput = {
+      baseUrl: "http://localhost:11234/v1",
+      apiKey: "local",
+      models: [{ id: "qwen3-4b" }],
+    };
+
+    const merged = mergeProvider({}, "mlx-serve-local", input) as {
+      providers: { "mlx-serve-local": { api?: string } };
+    };
+
+    expect(merged.providers["mlx-serve-local"].api).toBe("openai-completions");
+  });
+
+  it("never adds api to an existing Provider that is missing it (fill-never-overwrite: never touch an existing Provider's api)", () => {
+    const existing = {
+      providers: {
+        "mlx-serve-local": {
+          baseUrl: "http://localhost:11234/v1",
+          models: [{ id: "qwen3-4b", name: "qwen3-4b" }],
+        },
+      },
+    };
+    const input: ProviderInput = { models: [{ id: "qwen3-4b" }] };
+
+    const merged = mergeProvider(existing, "mlx-serve-local", input) as {
+      providers: { "mlx-serve-local": { api?: string } };
+    };
+
+    expect(merged.providers["mlx-serve-local"].api).toBeUndefined();
+  });
+
+  it("never overwrites an existing Provider's explicit api with the default", () => {
+    const existing = {
+      providers: {
+        lmstudio: { baseUrl: "http://localhost:1234/v1", api: "anthropic-messages", models: [] },
+      },
+    };
+    const input: ProviderInput = { baseUrl: "http://localhost:1234/v1", models: [] };
+
+    const merged = mergeProvider(existing, "lmstudio", input) as {
+      providers: { lmstudio: { api: string } };
+    };
+
+    expect(merged.providers.lmstudio.api).toBe("anthropic-messages");
+  });
+
   it("preserves an existing contextWindow and fills a missing maxTokens with a conservative default", () => {
     const existing = {
       providers: {
@@ -286,6 +333,44 @@ describe("validate — pre-write mirrored-schema validation (R2)", () => {
   });
 });
 
+describe("validate — strict api requirement for a plugin-authored NEW Provider (v0.1.1 hotfix item 1)", () => {
+  it("rejects a plugin-built provider input missing api at both the provider and model level", () => {
+    const file = { providers: { "mlx-serve-local": { models: [{ id: "qwen3-4b", name: "qwen3-4b" }] } } };
+
+    const result = validate(file, ["mlx-serve-local"]);
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.errors.some((e) => e.includes("api"))).toBe(true);
+    }
+  });
+
+  it("accepts when the provider carries api", () => {
+    const file = {
+      providers: { "mlx-serve-local": { api: "openai-completions", models: [{ id: "qwen3-4b", name: "qwen3-4b" }] } },
+    };
+
+    expect(validate(file, ["mlx-serve-local"])).toEqual({ ok: true });
+  });
+
+  it("accepts when every model carries its own api even without a provider-level api", () => {
+    const file = {
+      providers: {
+        "mlx-serve-local": { models: [{ id: "qwen3-4b", name: "qwen3-4b", api: "openai-completions" }] },
+      },
+    };
+
+    expect(validate(file, ["mlx-serve-local"])).toEqual({ ok: true });
+  });
+
+  it("stays permissive for a Provider not listed in strictNewProviderKeys, even if it lacks api entirely", () => {
+    const file = realisticLmstudioFile(); // no `api` field anywhere in this fixture
+
+    expect(validate(file, [])).toEqual({ ok: true });
+    expect(validate(file)).toEqual({ ok: true });
+  });
+});
+
 describe("lint — compat-key lint warns without blocking (R2)", () => {
   it("returns no warnings when every compat key is known", () => {
     const file = realisticLmstudioFile();
@@ -445,6 +530,35 @@ describe("commit — full orchestration against stubbed WriterPorts (R2)", () =>
       expect(outcome.lint.some((w) => w.includes("bogusKey"))).toBe(true);
     }
     expect(JSON.parse(ports.files[path]).providers.lmstudio.models[0].id).toBe("m1");
+  });
+
+  it("sets api on a brand-new Provider written via commit() (v0.1.1 hotfix item 1)", async () => {
+    const ports = memoryPorts({});
+
+    const outcome = await commit(ports, path, "mlx-serve-local", {
+      baseUrl: "http://localhost:11234/v1",
+      models: [{ id: "qwen3-4b" }],
+    });
+
+    expect(outcome.kind).toBe("written");
+    const written = JSON.parse(ports.files[path]);
+    expect(written.providers["mlx-serve-local"].api).toBe("openai-completions");
+  });
+
+  it("byte-preserves a re-added existing Provider that has no api, and never requires one for it (v0.1.1 hotfix item 1)", async () => {
+    const existing = realisticLmstudioFile();
+    const ports = memoryPorts({ [path]: JSON.stringify(existing) });
+
+    const outcome = await commit(ports, path, "lmstudio", {
+      models: REALISTIC_LMSTUDIO_MODELS.map((m) => ({ id: m.id, contextWindow: 4096, maxTokens: 256 })),
+    });
+
+    expect(outcome.kind).toBe("written");
+    const written = JSON.parse(ports.files[path]);
+    expect(written.providers.lmstudio.api).toBeUndefined();
+    for (const original of (existing.providers.lmstudio as { models: unknown[] }).models) {
+      expect(written.providers.lmstudio.models).toContainEqual(original);
+    }
   });
 
   it("auto-restores the newest backup when verifyWritten reports an empty Provider map, naming the backup restored from", async () => {

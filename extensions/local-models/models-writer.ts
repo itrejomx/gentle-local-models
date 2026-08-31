@@ -222,7 +222,18 @@ function createModel(input: ModelInput): Json {
 export function mergeProvider(existingRaw: unknown, providerKey: string, input: ProviderInput): Json {
   const file = asObject(existingRaw);
   const providers = asObject(file.providers);
+  const providerIsNew = providers[providerKey] === undefined;
   const provider = asObject(providers[providerKey]);
+
+  // v0.1.1 hotfix item 1: Pi's provider composer requires `api` at the
+  // Provider or Model level to resolve requests (live E2E: "no \"api\"
+  // specified"). Only set it on a brand NEW Provider — fill-never-overwrite
+  // must never touch an existing Provider's `api`, even one that happens to
+  // be missing it (e.g. a pre-v0.1.1 write, or a hand-curated Provider that
+  // sets `api` per-model instead).
+  if (providerIsNew && provider.api === undefined) {
+    provider.api = "openai-completions";
+  }
 
   if (provider.baseUrl === undefined && input.baseUrl !== undefined) {
     provider.baseUrl = input.baseUrl;
@@ -304,6 +315,10 @@ const ModelEntrySchema = Type.Object({
   reasoning: Type.Optional(Type.Boolean()),
   input: Type.Optional(Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]))),
   compat: Type.Optional(ModelCompatSchema),
+  // v0.1.1 hotfix item 1: Pi's provider composer accepts `api` at either the
+  // Provider or the Model level; declared here for mirror accuracy even
+  // though the permissive schema already tolerated it unlisted.
+  api: Type.Optional(Type.String({ minLength: 1 })),
 });
 
 const ProviderSchema = Type.Object({
@@ -315,6 +330,8 @@ const ProviderSchema = Type.Object({
   // additionalProperties: false) already tolerated them unlisted.
   headers: Type.Optional(Type.Record(Type.String(), Type.String())),
   authHeader: Type.Optional(Type.Boolean()),
+  // v0.1.1 hotfix item 1: required by Pi's provider composer (see ModelEntrySchema.api above).
+  api: Type.Optional(Type.String({ minLength: 1 })),
   models: Type.Optional(Type.Array(ModelEntrySchema)),
 });
 
@@ -363,13 +380,49 @@ export function listProviders(raw: string | undefined): ProviderEntry[] {
   });
 }
 
-/** Pre-write validation (R2) against the mirrored schema. File-shape only — see module header for scope. */
-export function validate(file: unknown): { ok: true } | { ok: false; errors: string[] } {
-  if (validator.Check(file)) {
-    return { ok: true };
+/**
+ * Pre-write validation (R2) against the mirrored schema. File-shape only —
+ * see module header for scope.
+ *
+ * `strictNewProviderKeys` (v0.1.1 hotfix item 1) adds one extra, targeted
+ * check on top of the permissive structural mirror: for each listed
+ * Provider key — the ones THIS write is creating brand new — every one of
+ * its models must resolve an `api` (Provider-level `api`, or that specific
+ * model's own `api`), matching Pi's real provider composer requirement. A
+ * Provider NOT listed here (an existing/hand-curated Provider this write
+ * only re-merges into) is never held to this check, even if it lacks `api`
+ * entirely — the mirror stays exactly as permissive as before for everyone
+ * else.
+ */
+export function validate(
+  file: unknown,
+  strictNewProviderKeys: string[] = [],
+): { ok: true } | { ok: false; errors: string[] } {
+  if (!validator.Check(file)) {
+    const errors = [...validator.Errors(file)].map((error) => `${error.instancePath || "root"}: ${error.message}`);
+    return { ok: false, errors };
   }
-  const errors = [...validator.Errors(file)].map((error) => `${error.instancePath || "root"}: ${error.message}`);
-  return { ok: false, errors };
+
+  const providers = asObject(asObject(file).providers);
+  const errors: string[] = [];
+  for (const providerKey of strictNewProviderKeys) {
+    const provider = asObject(providers[providerKey]);
+    const providerHasApi = typeof provider.api === "string" && provider.api.length > 0;
+    const models = asArray(provider.models).map((m) => asObject(m));
+    for (const model of models) {
+      const modelHasApi = typeof model.api === "string" && model.api.length > 0;
+      if (!providerHasApi && !modelHasApi) {
+        errors.push(
+          `Provider "${providerKey}", model "${model.id}": missing "api" (required by Pi's provider composer) at the Provider or Model level`,
+        );
+      }
+    }
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+  return { ok: true };
 }
 
 function warnUnknownKeys(compatRaw: unknown, known: Set<string>, label: string, warnings: string[]): void {
@@ -547,9 +600,14 @@ export async function commit(
     }
   }
 
+  // v0.1.1 hotfix item 1: capture whether this write is CREATING `providerKey`
+  // brand new, before mergeProvider folds it into `existing` — this is
+  // exactly the case validate()'s strict api check must cover, and exactly
+  // the case mergeProvider itself fills `api` for.
+  const providerIsNew = asObject(asObject(existing).providers)[providerKey] === undefined;
   const merged = mergeProvider(existing, providerKey, input);
 
-  const validation = validate(merged);
+  const validation = validate(merged, providerIsNew ? [providerKey] : []);
   if (!validation.ok) {
     return { kind: "invalid", errors: validation.errors, backups: await listBackupsSafely(ports, path) };
   }
