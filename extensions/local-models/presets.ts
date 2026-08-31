@@ -94,6 +94,23 @@ const OWNED_BY_KIND: Readonly<Record<string, ServerKind>> = {
   omlx: "omlx",
 };
 
+// v0.1.1 hotfix item 3b: named so v0.2 can extend the option table. Each
+// option applies its exact token value to every model still `unresolved`
+// after context.resolve — no per-model prompting (see index.ts `add`'s
+// batched context-window prompt).
+export const CONTEXT_WINDOW_PRESETS: ReadonlyArray<{ label: string; value: number }> = [
+  { label: "32k (32768)", value: 32768 },
+  { label: "64k (65536)", value: 65536 },
+  { label: "128k (131072)", value: 131072 },
+  { label: "192k (196608)", value: 196608 },
+  { label: "256k (262144)", value: 262144 },
+];
+
+// R4-010 (PR11 rider batch): caps how many ids/pairs a batched dialog inlines
+// before summarizing the rest, so a large Server (e.g. 25 models) doesn't
+// produce an unreadably long select title or confirm message.
+export const DIALOG_ID_LIMIT = 8;
+
 /**
  * Maps a probed Server's `owned_by` value to the ServerKind `add` preselects.
  * Normalized with `toLowerCase().trim()` first (R3-023) so a Server

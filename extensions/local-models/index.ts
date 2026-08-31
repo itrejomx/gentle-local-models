@@ -7,7 +7,15 @@
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { isLocalHost, normalize, probe, probeAll, type FetchLike } from "./detect.ts";
-import { kindFromOwnedBy, provider, thinking, type ServerKind, type ThinkingFormat } from "./presets.ts";
+import {
+  CONTEXT_WINDOW_PRESETS,
+  DIALOG_ID_LIMIT,
+  kindFromOwnedBy,
+  provider,
+  thinking,
+  type ServerKind,
+  type ThinkingFormat,
+} from "./presets.ts";
 import { resolve as resolveContext, type ContextPorts, type PropsFields, type VModelsFields } from "./context.ts";
 import {
   commit,
@@ -39,23 +47,7 @@ import { modelsJsonPath, realContextPorts, realFetchProps, realFetchVModels, rea
 
 const SERVER_KINDS: ServerKind[] = ["mtplx", "omlx", "mlx-serve", "llama-swap", "generic"];
 
-// v0.1.1 hotfix item 3b: named so v0.2 can extend the option table. Each
-// option applies its exact token value to every model still `unresolved`
-// after context.resolve — no per-model prompting (see `add`'s batched
-// context-window prompt).
-const CONTEXT_WINDOW_PRESETS: ReadonlyArray<{ label: string; value: number }> = [
-  { label: "32k (32768)", value: 32768 },
-  { label: "64k (65536)", value: 65536 },
-  { label: "128k (131072)", value: 131072 },
-  { label: "192k (196608)", value: 196608 },
-  { label: "256k (262144)", value: 262144 },
-];
 const CUSTOM_CONTEXT_WINDOW_OPTION = "Custom…";
-
-// R4-010: caps how many ids/pairs a batched dialog inlines before summarizing
-// the rest, so a large Server (e.g. 25 models) doesn't produce an
-// unreadably long select title or confirm message.
-const DIALOG_ID_LIMIT = 8;
 
 /**
  * Joins `items` for inline display in a dialog title/message, bounded at
