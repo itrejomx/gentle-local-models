@@ -6,7 +6,7 @@
 // imports Pi's runtime — only its types, which jiti erases (D1, D8).
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
-import { isLocalHost, normalize, probe, probeAll, type FetchLike } from "./detect.ts";
+import { isLocalHost, missingPort, normalize, probe, probeAll, type FetchLike } from "./detect.ts";
 import {
   CONTEXT_WINDOW_PRESETS,
   DIALOG_ID_LIMIT,
@@ -693,36 +693,112 @@ function buildCommandPorts(ctx: ExtensionCommandContext): AddPorts {
   };
 }
 
+const USAGE = "/local-models add <baseUrl> | list | prune";
+
+function usage(ctx: AddContext, subcommand: string | undefined): void {
+  notify(ctx.ui, `"${subcommand ?? ""}" is not available — usage: ${USAGE}`, "warning");
+}
+
+/**
+ * `add` with no URL — from the root menu's "Add a Server…" or a bare typed
+ * `add` (v0.1.2) — prompts for the base URL via the editor, prefilled
+ * `http://localhost:`, instead of the old error-usage notify. A cancel or an
+ * empty/whitespace-only answer takes the same quiet path: one info notify
+ * ("Registration cancelled.", matching the Server-kind picker's own cancel
+ * copy — R2-012) and nothing else — `promptWithPrefill` already collapses a
+ * real dialog cancel and `!ctx.hasUI` into the same `undefined`, so this one
+ * check covers both. R2-013: the title now spells out an example
+ * (`http://localhost:8080`), and the submitted value must carry an explicit
+ * port — accepting the `http://localhost:` prefill unedited (or any other
+ * port-less host) reports "Include the port, e.g. http://localhost:8080"
+ * and returns without probing, rather than silently falling back to an
+ * implicit port (e.g. 80) and failing with a confusing connection error. A
+ * real port-bearing value falls straight into the normal `add` flow,
+ * including its existing R3-002 friendly error for an otherwise invalid
+ * URL. The typed `add <url>` path is unchanged — this check only applies to
+ * the prompted flow.
+ */
+async function addPromptingUrl(ctx: AddContext, ports: AddPorts): Promise<void> {
+  const answer = await promptWithPrefill(ctx, "Server base URL (e.g. http://localhost:8080)", "http://localhost:");
+  const baseUrl = answer?.trim();
+  if (!baseUrl) {
+    notify(ctx.ui, "Registration cancelled.", "info");
+    return;
+  }
+  if (missingPort(baseUrl)) {
+    notify(ctx.ui, "Include the port, e.g. http://localhost:8080", "error");
+    return;
+  }
+  await add(baseUrl, ctx, ports);
+}
+
+/**
+ * Shell entry point for `/local-models` (v0.1.2). Extracted out of
+ * `registerCommand`'s handler so it is fully unit-testable against the same
+ * fake ctx/ports convention as `add`/`list`/`prune` (tests/index.dispatch.test.ts)
+ * — the handler itself stays a thin `dispatch(args, ctx, buildCommandPorts(ctx))`
+ * call, never imported by tests.
+ *
+ * A bare command (no subcommand) with a dialog-capable UI opens the
+ * nanocoder-style root menu — "Add a Server…" / "List Servers" / "Prune
+ * Unserved Models" — routing to the existing add/list/prune flows; cancelling
+ * the menu returns quietly (no notify). Without a dialog-capable UI, the bare
+ * command falls straight to the same usage notify as an unknown subcommand.
+ */
+export async function dispatch(args: string, ctx: AddContext, ports: AddPorts): Promise<void> {
+  const [subcommand, ...rest] = args.trim().split(/\s+/).filter(Boolean);
+
+  if (subcommand === undefined) {
+    if (!ctx.hasUI) {
+      usage(ctx, subcommand);
+      return;
+    }
+
+    const choice = await selectFromList(ctx.ui, "Local models", ["Add a Server…", "List Servers", "Prune Unserved Models"]);
+    if (choice === "Add a Server…") {
+      await addPromptingUrl(ctx, ports);
+      return;
+    }
+    if (choice === "List Servers") {
+      await list(ctx, ports);
+      return;
+    }
+    if (choice === "Prune Unserved Models") {
+      await prune(ctx, ports);
+      return;
+    }
+    // Cancelled (Esc/undefined) — quiet return, no notify.
+    return;
+  }
+
+  if (subcommand === "add") {
+    const baseUrlInput = rest.join(" ");
+    if (!baseUrlInput) {
+      await addPromptingUrl(ctx, ports);
+      return;
+    }
+    await add(baseUrlInput, ctx, ports);
+    return;
+  }
+
+  if (subcommand === "list") {
+    await list(ctx, ports);
+    return;
+  }
+
+  if (subcommand === "prune") {
+    await prune(ctx, ports);
+    return;
+  }
+
+  usage(ctx, subcommand);
+}
+
 export default function localModelsExtension(pi: ExtensionAPI): void {
   pi.registerCommand("local-models", {
     description: "Register, list, and prune local model Servers as Pi Providers.",
     handler: async (args, ctx) => {
-      const [subcommand, ...rest] = args.trim().split(/\s+/).filter(Boolean);
-
-      if (subcommand === "add") {
-        const baseUrlInput = rest.join(" ");
-        if (!baseUrlInput) {
-          ctx.ui.notify("Usage: /local-models add <baseUrl>", "error");
-          return;
-        }
-        await add(baseUrlInput, ctx, buildCommandPorts(ctx));
-        return;
-      }
-
-      if (subcommand === "list") {
-        await list(ctx, buildCommandPorts(ctx));
-        return;
-      }
-
-      if (subcommand === "prune") {
-        await prune(ctx, buildCommandPorts(ctx));
-        return;
-      }
-
-      ctx.ui.notify(
-        `"${subcommand ?? ""}" is not available — usage: /local-models add <baseUrl> | list | prune`,
-        "warning",
-      );
+      await dispatch(args, ctx, buildCommandPorts(ctx));
     },
   });
 }

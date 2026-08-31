@@ -5,10 +5,31 @@ llama-swap, mtplx, omlx, or anything generic) as Pi Providers, without hand-edit
 `models.json`.
 
 ```
-/local-models add <baseUrl>   register a Server, resolve context windows, propose thinking formats
+/local-models                  open a menu: Add a Server… / List Servers / Prune Unserved Models
+/local-models add [baseUrl]    register a Server; with no baseUrl, prompts for one (prefilled http://localhost:)
 /local-models list             probe every known Server, show reachability
 /local-models prune            remove models a Server no longer reports (one confirmation, one backup)
 ```
+
+### Bare `/local-models` opens a menu (v0.1.2)
+
+Running `/local-models` with no subcommand and a dialog-capable UI opens a
+menu — "Add a Server…", "List Servers", "Prune Unserved Models" — routing to
+the same add/list/prune flows below. Cancelling the menu (Esc) returns
+quietly, no notification. Without a dialog-capable UI (non-interactive run),
+the bare command falls back to the usage notice instead of opening a dialog.
+
+Picking "Add a Server…", or typing `/local-models add` with no URL, prompts
+(titled "Server base URL (e.g. http://localhost:8080)") for the Server's
+base URL via an editable prefill (`http://localhost:`) — edit it to the
+real host:port and submit. Cancelling, or submitting empty text, is a quiet
+"Registration cancelled." (matching the Server-kind picker's own cancel
+copy) — nothing is probed or written. Submitting without an explicit port
+(e.g. accepting the prefill unedited) reports "Include the port, e.g.
+http://localhost:8080" and does not probe. A submitted value with a port
+continues into the normal `add` flow below (host:port, a trailing `/v1`, or
+`/v1/` all normalize the same way; an unparsable URL gets the same friendly
+error as typing it directly).
 
 ## Dev loop
 

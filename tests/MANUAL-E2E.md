@@ -22,13 +22,33 @@ this checklist.
 
 ## 1. `add` — happy path
 
-- [ ] Run `/local-models add localhost:11234` (mlx-serve) or
-      `/local-models add localhost:8080` (llama-swap).
+- [ ] Run bare `/local-models` — confirm a menu opens with "Add a Server…",
+      "List Servers", "Prune Unserved Models", in that order.
+  - [ ] Press Esc/cancel — confirm nothing happens: no notification, nothing
+        probed or written.
+  - [ ] Pick "Add a Server…" — confirm an editable prompt opens, titled
+        "Server base URL (e.g. http://localhost:8080)", prefilled
+        `http://localhost:`.
+    - [ ] Cancel it (Esc), or clear it and submit empty — confirm a single
+          "Registration cancelled." notice, nothing probed or written.
+    - [ ] Submit the prefill unedited (still `http://localhost:`, no port) —
+          confirm "Include the port, e.g. http://localhost:8080" and that
+          nothing is probed or written.
+    - [ ] Edit it to a real Server's host:port (e.g. `localhost:11234` or
+          `localhost:8080`) and submit — confirm it continues into the same
+          flow as below.
+- [ ] Separately, run `/local-models add localhost:11234` (mlx-serve) or
+      `/local-models add localhost:8080` (llama-swap) directly, and
+      `/local-models add` with no URL — confirm the no-URL form opens the
+      same prefilled prompt as the menu's "Add a Server…" above.
 - [ ] Confirm the Server-kind picker opens with the Server's own kind
       preselected first (detected from `/v1/models`' `owned_by`) — select it,
       or pick a different kind if you want to test the override.
 - [ ] Confirm the success notification names the Provider key and model
       count.
+- [ ] Run `pi -e '/local-models'` (or any non-interactive invocation) —
+      confirm the bare command falls back to the usage notice instead of
+      opening the menu.
 
 ## 2. Context-resolution prompt behavior (v0.1.1: batched, one prompt per run)
 
