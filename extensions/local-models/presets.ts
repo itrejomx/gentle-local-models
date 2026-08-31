@@ -50,11 +50,25 @@ const FAMILY_PREFIXES: ReadonlyArray<[prefix: string, format: ThinkingFormat]> =
  * omitted), and only when `reasoning` is true. An explicit `override` wins
  * over the heuristic, covering the per-model pre-write override requirement.
  * Never applies at the Provider level — see `CompatBlock`.
+ *
+ * fix/family-token-match: the basename (after the last "/") is split on "-"
+ * and "_" into tokens, and a family matches when ANY token `startsWith` a
+ * known prefix — not just the whole basename. This is required for
+ * vendor-prefixed llama-swap ids such as `mtplx-qwen38-27b-uncensored-4bit`,
+ * where the family sits in a middle token rather than leading the basename.
+ * Matching stays per-token `startsWith` (never a raw substring search), so
+ * `Kwaipilot_KAT-Coder-V2.5-Dev-Q8_0` still correctly matches nothing.
+ * Accepted trade-off: a token that merely happens to equal a family name —
+ * e.g. `not-a-qwen-finetune` — now also matches. This is intentional: every
+ * proposal from this heuristic is opt-in, surfaced through the batched
+ * reasoning confirm in `add` (R3-015) and never applied silently, so a rare
+ * over-match is a one-click decline rather than a silently wrong write.
  */
 function matchFamilyPrefix(modelId: string): [prefix: string, format: ThinkingFormat] | undefined {
   const id = modelId.toLowerCase();
   const basename = id.slice(id.lastIndexOf("/") + 1);
-  return FAMILY_PREFIXES.find(([prefix]) => basename.startsWith(prefix));
+  const tokens = basename.split(/[-_]/);
+  return FAMILY_PREFIXES.find(([prefix]) => tokens.some((token) => token.startsWith(prefix)));
 }
 
 export function thinking(

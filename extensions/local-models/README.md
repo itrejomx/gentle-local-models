@@ -104,7 +104,15 @@ dozens of dialogs in a row. As of v0.1.1:
   signals a non-thinking variant. Every remaining family-matched model is
   offered in ONE confirm ("Mark N models as reasoning models with
   thinkingFormat per family? ..."); accepting sets `reasoning` and
-  `thinkingFormat` on all of them, declining sets neither on any of them.
+  `thinkingFormat` on all of them, declining sets neither on any of them. The
+  family match splits the basename (after the last `/`) on `-`/`_` and
+  matches if ANY token starts with a known family prefix (`qwen`, `glm`,
+  `deepseek`) — not just the start of the whole basename — so vendor-prefixed
+  llama-swap ids like `mtplx-qwen38-27b-uncensored-4bit` are proposed too.
+  This can occasionally over-match a token that merely resembles a family
+  name (e.g. `not-a-qwen-finetune`); it is an accepted trade-off since the
+  proposal is always opt-in through this same confirm, never applied
+  silently.
 
 **Removed in this batching**: the per-model `thinkingFormat` override editor
 that used to follow each individual reasoning confirm. In v0.1.1 there is no
