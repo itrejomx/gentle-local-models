@@ -106,6 +106,13 @@ describe("kindFromOwnedBy — Server-kind auto-detect from /v1/models owned_by (
     expect(kindFromOwnedBy("__proto__")).toBe("generic");
     expect(kindFromOwnedBy("toString")).toBe("generic");
   });
+
+  it("is case-insensitive and trims surrounding whitespace (R3-023)", () => {
+    expect(kindFromOwnedBy("Llama-Swap")).toBe("llama-swap");
+    expect(kindFromOwnedBy(" MTPLX ")).toBe("mtplx");
+    expect(kindFromOwnedBy("OMLX")).toBe("omlx");
+    expect(kindFromOwnedBy("Mlx-Serve")).toBe("mlx-serve");
+  });
 });
 
 describe("matchedFamily (R3-015)", () => {

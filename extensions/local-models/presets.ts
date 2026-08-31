@@ -96,6 +96,10 @@ const OWNED_BY_KIND: Readonly<Record<string, ServerKind>> = {
 
 /**
  * Maps a probed Server's `owned_by` value to the ServerKind `add` preselects.
+ * Normalized with `toLowerCase().trim()` first (R3-023) so a Server
+ * declaring `"Llama-Swap"` or `" MTPLX "` still resolves to its matching
+ * kind instead of falling through to "generic" on a case/whitespace
+ * mismatch — `OWNED_BY_KIND`'s keys are themselves already lowercase.
  * `Object.hasOwn` guards the lookup (R1-008) so a Server declaring
  * `owned_by: "constructor"` (or `"__proto__"`, `"toString"`, ...) can never
  * resolve to an inherited `Object.prototype` property instead of a genuine
@@ -103,8 +107,12 @@ const OWNED_BY_KIND: Readonly<Record<string, ServerKind>> = {
  * other unrecognized value.
  */
 export function kindFromOwnedBy(ownedBy: string | undefined): ServerKind {
-  if (ownedBy === undefined || !Object.hasOwn(OWNED_BY_KIND, ownedBy)) {
+  if (ownedBy === undefined) {
     return "generic";
   }
-  return OWNED_BY_KIND[ownedBy];
+  const normalized = ownedBy.toLowerCase().trim();
+  if (!Object.hasOwn(OWNED_BY_KIND, normalized)) {
+    return "generic";
+  }
+  return OWNED_BY_KIND[normalized];
 }
