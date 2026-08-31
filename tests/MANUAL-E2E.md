@@ -24,54 +24,68 @@ this checklist.
 
 - [ ] Run `/local-models add localhost:11234` (mlx-serve) or
       `/local-models add localhost:8080` (llama-swap).
-- [ ] Select the matching Server kind at the prompt (`mlx-serve` /
-      `llama-swap`).
+- [ ] Confirm the Server-kind picker opens with the Server's own kind
+      preselected first (detected from `/v1/models`' `owned_by`) — select it,
+      or pick a different kind if you want to test the override.
 - [ ] Confirm the success notification names the Provider key and model
       count.
 
-## 2. Context-resolution prompt behavior
+## 2. Context-resolution prompt behavior (v0.1.1: batched, one prompt per run)
 
-Exercise this against a model whose `contextWindow` is not yet in
-`models.json` (a fresh Provider key, or delete the model's entry first).
+Exercise this against a Server with at least one model whose `contextWindow`
+is not yet in `models.json` (a fresh Provider key, or delete the model's
+entry first). With several such models on the same Server, confirm exactly
+ONE prompt appears for all of them together — not one per model.
 
 - [ ] **Verified source available** (mlx-serve `/v1/models`, or llama-swap
-      with a readable `config.yaml`): no prompt appears; the model is
+      with a readable `config.yaml`): no prompt appears for that model; it is
       registered with `contextWindow` set and labeled `verificado` in
       `gentle-local-models.json`.
-- [ ] **No source resolves**: an editable prompt appears per model,
-      pre-filled with `32768`.
-  - [ ] Accept the pre-filled value unedited → registered, labeled
+- [ ] **One or more models have no source**: ONE picker appears, titled
+      "Context window for N models without a source: `<ids>`", offering
+      `32k (32768)`, `64k (65536)`, `128k (131072)`, `192k (196608)`,
+      `256k (262144)`, and `Custom…`.
+  - [ ] Pick a preset → every listed model gets that exact value, labeled
         `declarado`.
-  - [ ] Edit it to a different positive integer → that value is used,
-        labeled `declarado`.
-  - [ ] Type something invalid (letters, `0`, a negative number, or leave it
-        empty) → a warning names the model and explains the value was
-        rejected; the model is registered anyway with `contextWindow`
-        omitted, labeled `placeholder`.
-  - [ ] Cancel the prompt (Esc / editor cancel) → same as invalid input:
-        `contextWindow` omitted, labeled `placeholder`, no crash.
+  - [ ] Pick `Custom…` → an editable prompt appears, prefilled `32768`.
+    - [ ] Accept the pre-filled value unedited, or edit it to a different
+          positive integer → that value applies to every listed model,
+          labeled `declarado`.
+    - [ ] Type something invalid (letters, `0`, a negative number, or leave
+          it empty) → a warning names the affected models and explains the
+          value was rejected; they are registered anyway with
+          `contextWindow` omitted, labeled `placeholder`.
+  - [ ] Cancel the picker (Esc) → same as an invalid `Custom…` answer:
+        `contextWindow` omitted for every listed model, labeled
+        `placeholder`, no crash, no editor opened.
 
-## 3. Reasoning-confirm behavior
+## 3. Reasoning-confirm behavior (v0.1.1: batched, one confirm per run)
 
-Pick a model whose id matches a known family (`qwen*`, `glm*`, `deepseek*`)
-and, separately if available, a Server that declares `capabilities` on
-`/v1/models` (mlx-serve does).
+Register a Server serving several models: at least one matching a known
+family (`qwen*`, `glm*`, `deepseek*`), one with `nothink` in its id (e.g.
+`qwen3-4b-nothink`), and, separately if available, a Server that declares
+`capabilities` on `/v1/models` (mlx-serve does).
 
 - [ ] **Server declares `"reasoning"` in `capabilities`**: no confirm prompt
-      — `reasoning: true` is set directly. If the family heuristic also
-      proposes a `thinkingFormat`, you get exactly one edit prompt to accept
-      or override it.
-- [ ] **Family-matched, not declared**: one confirm prompt appears
-      ("Model `<id>` looks like a `<family>` reasoning model. Mark
-      reasoning + thinkingFormat `<format>`?").
-  - [ ] Accept → both `reasoning` and `compat.thinkingFormat` are set; you
-        then get one edit prompt to keep or override the format.
-  - [ ] Decline → neither `reasoning` nor `thinkingFormat` is set for that
-        model.
+      for that model — `reasoning: true` and the family `thinkingFormat` are
+      set directly. There is no follow-up edit prompt in v0.1.1 (the
+      per-model override was removed — see README's "Known v0.1
+      limitations").
+- [ ] **id contains `nothink` (case-insensitive)**: no confirm prompt for
+      that model — `reasoning` and `thinkingFormat` stay unset, and it is
+      named in its own notice, separate from the batch confirm.
+- [ ] **Remaining family-matched, undeclared models**: exactly ONE confirm
+      prompt appears ("Mark N models as reasoning models with
+      thinkingFormat per family? `<id → format, ...>`"), listing every one
+      of them together.
+  - [ ] Accept → every listed model gets `reasoning: true` and its own
+        family-matched `thinkingFormat`. There is no follow-up edit prompt.
+  - [ ] Decline → neither `reasoning` nor `thinkingFormat` is set for any of
+        them.
 - [ ] **No family match**: nothing is proposed, no prompt.
 - [ ] **Non-interactive** (`pi -e`/scripted invocation with no UI): no
-      prompts fire; a single warning names every family-matched-but-unconfirmed
-      model instead of guessing.
+      prompts fire (including the context-window picker); a single warning
+      names every family-matched-but-unconfirmed model instead of guessing.
 
 ## 4. Provider visibility
 

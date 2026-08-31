@@ -18,7 +18,17 @@ function fakeCtx({ hasUI = true }: { hasUI?: boolean } = {}): AddContext & {
   editor: ReturnType<typeof vi.fn>;
   notify: ReturnType<typeof vi.fn>;
 } {
-  const select = vi.fn(async () => "mlx-serve");
+  // Two independent select() dialogs share this one fake (v0.1.1 hotfix item
+  // 3): "Server kind" (kind picker, preselected but still a real choice) and
+  // "Context window for ..." (the batched preset picker, item 3b). Dispatch
+  // on title so a test overriding one via mockResolvedValue/mockImplementation
+  // still gets a sane default for the other unless it overrides both.
+  const select = vi.fn(async (title: string) => {
+    if (title.startsWith("Context window")) {
+      return "32k (32768)";
+    }
+    return "mlx-serve";
+  });
   const confirm = vi.fn(async () => true);
   const editor = vi.fn(async () => "32768");
   const notify = vi.fn();
@@ -82,12 +92,13 @@ function fakeStatePorts(initial?: string): StatePorts & { writes: string[] } {
 }
 
 const noLlamaSwapConfig: ContextPorts = { readLlamaSwapConfig: async () => undefined };
+const CUSTOM_LABEL = "Custom…";
 
-function reachableFetch(modelIds: string[]): FetchLike {
+function reachableFetch(modelIds: string[], ownedBy?: string): FetchLike {
   return vi.fn(async () => ({
     ok: true,
     status: 200,
-    json: async () => ({ data: modelIds.map((id) => ({ id })) }),
+    json: async () => ({ data: modelIds.map((id) => (ownedBy !== undefined ? { id, owned_by: ownedBy } : { id })) }),
   })) as unknown as FetchLike;
 }
 
@@ -173,6 +184,44 @@ describe("add — Server-kind selection", () => {
   });
 });
 
+describe("add — Server-kind auto-detect preselects the picker (v0.1.1 hotfix item 3a)", () => {
+  it("puts the owned_by-detected kind first in the Server kind options", async () => {
+    const ctx = fakeCtx();
+    ctx.select.mockImplementation(async (title: string, options: string[]) =>
+      title === "Server kind" ? options[0] : "32k (32768)",
+    );
+    const ports = basePorts({ fetch: reachableFetch(["m1"], "llama-swap") });
+
+    await add("localhost:8080", ctx, ports);
+
+    const kindCall = ctx.select.mock.calls.find(([title]) => title === "Server kind");
+    expect(kindCall?.[1][0]).toBe("llama-swap");
+    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
+    expect(written.providers["llama-swap"]).toBeDefined();
+  });
+
+  it("falls back to generic first when owned_by is unrecognized or absent", async () => {
+    const ctx = fakeCtx();
+    const ports = basePorts({ fetch: reachableFetch(["m1"]) });
+
+    await add("localhost:11234", ctx, ports);
+
+    const kindCall = ctx.select.mock.calls.find(([title]) => title === "Server kind");
+    expect(kindCall?.[1][0]).toBe("generic");
+  });
+
+  it("aborts registration as today when the user cancels the preselected picker", async () => {
+    const ctx = fakeCtx();
+    ctx.select.mockImplementation(async (title: string) => (title === "Server kind" ? undefined : "32k (32768)"));
+    const ports = basePorts({ fetch: reachableFetch(["m1"], "mtplx") });
+
+    await add("localhost:8000", ctx, ports);
+
+    expect(ctx.notify).toHaveBeenCalledWith(expect.stringContaining("cancelled"), "info");
+    expect(Object.keys((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files)).toHaveLength(0);
+  });
+});
+
 describe("add — per-kind Provider extras (mtplx headers, omlx authHeader)", () => {
   it("writes mtplx's x-mtplx-client header onto the Provider", async () => {
     const ctx = fakeCtx();
@@ -218,16 +267,15 @@ describe("add — context resolution guard (D-005)", () => {
 
     expect(fetchVModels).not.toHaveBeenCalled();
     expect(fetchProps).not.toHaveBeenCalled();
-    expect(ctx.editor).not.toHaveBeenCalledWith(expect.stringContaining("contextWindow"), expect.anything());
+    expect(ctx.select).not.toHaveBeenCalledWith(expect.stringContaining("Context window"), expect.anything());
     const written = JSON.parse(writer.files["/pi/agent/models.json"]);
     expect(written.providers["mlx-serve"].models[0].contextWindow).toBe(131072);
   });
 });
 
 describe("add — context metadata fetch is bounded and loader-wrapped (R4-005)", () => {
-  it("completes to the ask-at-registration prompt when the real ports' metadata fetch never resolves within its timeout", async () => {
+  it("completes to the batched context-window prompt when the real ports' metadata fetch never resolves within its timeout", async () => {
     const ctx = fakeCtx();
-    ctx.editor.mockResolvedValue("32768");
     const neverResolving: FetchLike = vi.fn((_url: string, init?: RequestInit) => {
       return new Promise((_resolve, reject) => {
         init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")));
@@ -240,8 +288,10 @@ describe("add — context metadata fetch is bounded and loader-wrapped (R4-005)"
 
     await add("localhost:11234", ctx, ports);
 
-    expect(ctx.editor).toHaveBeenCalledWith(expect.stringContaining("contextWindow"), "32768");
+    expect(ctx.select).toHaveBeenCalledWith(expect.stringContaining("qwen3-4b"), expect.arrayContaining(["32k (32768)"]));
     expect(ctx.ui.setWorkingMessage).toHaveBeenCalledWith(expect.stringContaining("Reading context metadata"));
+    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
+    expect(written.providers["mlx-serve"].models[0].contextWindow).toBe(32768);
   }, 2000);
 });
 
@@ -254,7 +304,7 @@ describe("add — context resolution, verificado source", () => {
 
     await add("localhost:11234", ctx, ports);
 
-    expect(ctx.editor).not.toHaveBeenCalledWith(expect.stringContaining("contextWindow"), expect.anything());
+    expect(ctx.select).not.toHaveBeenCalledWith(expect.stringContaining("Context window"), expect.anything());
     const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
     expect(written.providers["mlx-serve"].models[0].contextWindow).toBe(8192);
     const state = JSON.parse((ports.state as StatePorts & { writes: string[] }).writes.at(-1)!);
@@ -262,40 +312,32 @@ describe("add — context resolution, verificado source", () => {
   });
 });
 
-describe("add — ask-at-registration prompt (D-006)", () => {
-  it("accepts the pre-filled 32768 and labels it declarado", async () => {
+describe("add — batched context-window prompt (v0.1.1 hotfix item 3b)", () => {
+  const presetCases: Array<[label: string, value: number]> = [
+    ["32k (32768)", 32768],
+    ["64k (65536)", 65536],
+    ["128k (131072)", 131072],
+    ["192k (196608)", 196608],
+    ["256k (262144)", 262144],
+  ];
+
+  it.each(presetCases)("preset %s applies exactly %i, labeled declarado", async (label, value) => {
     const ctx = fakeCtx();
-    ctx.editor.mockResolvedValue("32768");
+    ctx.select.mockImplementation(async (title: string) => (title.startsWith("Context window") ? label : "mlx-serve"));
     const ports = basePorts();
 
     await add("localhost:11234", ctx, ports);
 
-    expect(ctx.editor).toHaveBeenCalledWith(expect.stringContaining("qwen3-4b"), "32768");
+    expect(ctx.select).toHaveBeenCalledWith(expect.stringContaining("Context window for 1 model without a source: qwen3-4b"), expect.any(Array));
     const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
-    expect(written.providers["mlx-serve"].models[0].contextWindow).toBe(32768);
+    expect(written.providers["mlx-serve"].models[0].contextWindow).toBe(value);
     const state = JSON.parse((ports.state as StatePorts & { writes: string[] }).writes.at(-1)!);
     expect(state.servers[0].models["qwen3-4b"]).toEqual({ contextLabel: "declarado", contextSource: "prompt" });
   });
-});
 
-describe("add — non-interactive / cancelled fallback (D-007)", () => {
-  it("omits contextWindow, labels placeholder, and warns by name when the editor is cancelled", async () => {
+  it("cancel at the select: omits contextWindow, labels placeholder, warns by name — no Custom editor opened", async () => {
     const ctx = fakeCtx();
-    ctx.editor.mockResolvedValue(undefined);
-    const ports = basePorts();
-
-    await add("localhost:11234", ctx, ports);
-
-    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
-    expect(written.providers["mlx-serve"].models[0].contextWindow).toBeUndefined();
-    expect(ctx.notify).toHaveBeenCalledWith(expect.stringContaining("qwen3-4b"), "warning");
-    const state = JSON.parse((ports.state as StatePorts & { writes: string[] }).writes.at(-1)!);
-    expect(state.servers[0].models["qwen3-4b"]).toEqual({ contextLabel: "placeholder", contextSource: "none" });
-  });
-
-  it("takes the same omit+placeholder+warning path without opening a dialog when ctx.hasUI is false", async () => {
-    const ctx = fakeCtx({ hasUI: false });
-    ctx.editor.mockResolvedValue("32768"); // must never be reached; !hasUI skips the dialog outright
+    ctx.select.mockImplementation(async (title: string) => (title.startsWith("Context window") ? undefined : "mlx-serve"));
     const ports = basePorts();
 
     await add("localhost:11234", ctx, ports);
@@ -304,95 +346,126 @@ describe("add — non-interactive / cancelled fallback (D-007)", () => {
     const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
     expect(written.providers["mlx-serve"].models[0].contextWindow).toBeUndefined();
     expect(ctx.notify).toHaveBeenCalledWith(expect.stringContaining("qwen3-4b"), "warning");
-  });
-});
-
-describe("add — validates the context prompt answer (R3-016)", () => {
-  it('"" is rejected: no contextWindow 0, placeholder path, no crash', async () => {
-    const ctx = fakeCtx();
-    ctx.editor.mockResolvedValue("");
-    const ports = basePorts();
-
-    await add("localhost:11234", ctx, ports);
-
-    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
-    expect(written.providers["mlx-serve"].models[0].contextWindow).toBeUndefined();
     const state = JSON.parse((ports.state as StatePorts & { writes: string[] }).writes.at(-1)!);
     expect(state.servers[0].models["qwen3-4b"]).toEqual({ contextLabel: "placeholder", contextSource: "none" });
   });
 
-  it('"abc" is rejected: placeholder path with a warning naming the rejected input', async () => {
+  it("Custom…: accepts a trimmed, valid answer and labels it declarado", async () => {
     const ctx = fakeCtx();
-    ctx.editor.mockResolvedValue("abc");
-    const ports = basePorts();
-
-    await add("localhost:11234", ctx, ports);
-
-    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
-    expect(written.providers["mlx-serve"].models[0].contextWindow).toBeUndefined();
-    expect(ctx.notify).toHaveBeenCalledWith(expect.stringContaining("abc"), "warning");
-    const state = JSON.parse((ports.state as StatePorts & { writes: string[] }).writes.at(-1)!);
-    expect(state.servers[0].models["qwen3-4b"]).toEqual({ contextLabel: "placeholder", contextSource: "none" });
-  });
-
-  it('"0" and negative values are rejected like cancel', async () => {
-    const ctx = fakeCtx();
-    ctx.editor.mockResolvedValue("0");
-    const ports = basePorts();
-
-    await add("localhost:11234", ctx, ports);
-
-    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
-    expect(written.providers["mlx-serve"].models[0].contextWindow).toBeUndefined();
-    const state = JSON.parse((ports.state as StatePorts & { writes: string[] }).writes.at(-1)!);
-    expect(state.servers[0].models["qwen3-4b"]).toEqual({ contextLabel: "placeholder", contextSource: "none" });
-  });
-
-  it('" 65536 " (surrounding whitespace) is trimmed and declared', async () => {
-    const ctx = fakeCtx();
+    ctx.select.mockImplementation(async (title: string) => (title.startsWith("Context window") ? CUSTOM_LABEL : "mlx-serve"));
     ctx.editor.mockResolvedValue(" 65536 ");
     const ports = basePorts();
 
     await add("localhost:11234", ctx, ports);
 
+    expect(ctx.editor).toHaveBeenCalledWith(expect.stringContaining("contextWindow"), "32768");
     const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
     expect(written.providers["mlx-serve"].models[0].contextWindow).toBe(65536);
     const state = JSON.parse((ports.state as StatePorts & { writes: string[] }).writes.at(-1)!);
     expect(state.servers[0].models["qwen3-4b"]).toEqual({ contextLabel: "declarado", contextSource: "prompt" });
   });
+
+  it.each(["", "abc", "0", "-5"])('Custom…: %j is rejected to the placeholder path, no crash', async (answer) => {
+    const ctx = fakeCtx();
+    ctx.select.mockImplementation(async (title: string) => (title.startsWith("Context window") ? CUSTOM_LABEL : "mlx-serve"));
+    ctx.editor.mockResolvedValue(answer);
+    const ports = basePorts();
+
+    await add("localhost:11234", ctx, ports);
+
+    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
+    expect(written.providers["mlx-serve"].models[0].contextWindow).toBeUndefined();
+    const state = JSON.parse((ports.state as StatePorts & { writes: string[] }).writes.at(-1)!);
+    expect(state.servers[0].models["qwen3-4b"]).toEqual({ contextLabel: "placeholder", contextSource: "none" });
+  });
+
+  it("Custom… cancelled (editor returns undefined): same placeholder path as an invalid answer", async () => {
+    const ctx = fakeCtx();
+    ctx.select.mockImplementation(async (title: string) => (title.startsWith("Context window") ? CUSTOM_LABEL : "mlx-serve"));
+    ctx.editor.mockResolvedValue(undefined);
+    const ports = basePorts();
+
+    await add("localhost:11234", ctx, ports);
+
+    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
+    expect(written.providers["mlx-serve"].models[0].contextWindow).toBeUndefined();
+    expect(ctx.notify).toHaveBeenCalledWith(expect.stringContaining("qwen3-4b"), "warning");
+  });
+
+  it("!hasUI: never opens the select or the editor, placeholder + warning as before (D-007)", async () => {
+    const ctx = fakeCtx({ hasUI: false });
+    const ports = basePorts();
+
+    await add("localhost:11234", ctx, ports);
+
+    expect(ctx.select).not.toHaveBeenCalledWith(expect.stringContaining("Context window"), expect.anything());
+    expect(ctx.editor).not.toHaveBeenCalled();
+    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
+    expect(written.providers["mlx-serve"].models[0].contextWindow).toBeUndefined();
+    expect(ctx.notify).toHaveBeenCalledWith(expect.stringContaining("qwen3-4b"), "warning");
+  });
+
+  it("mixed: only the unresolved model gets prompted; the verified one keeps its resolved value untouched", async () => {
+    const ctx = fakeCtx();
+    ctx.select.mockImplementation(async (title: string) => {
+      if (title.startsWith("Context window")) return "128k (131072)";
+      return "mlx-serve";
+    });
+    const ports = basePorts({
+      fetch: reachableFetch(["qwen3-4b", "glm-4.5-air"]),
+      fetchVModels: vi.fn(async () => ({ "qwen3-4b": { max_model_len: 8192 } })),
+    });
+
+    await add("localhost:11234", ctx, ports);
+
+    const contextCall = ctx.select.mock.calls.find(([title]) => (title as string).startsWith("Context window"));
+    expect(contextCall?.[0]).toContain("glm-4.5-air");
+    expect(contextCall?.[0]).not.toContain("qwen3-4b");
+    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
+    const models: Array<{ id: string; contextWindow?: number }> = written.providers["mlx-serve"].models;
+    expect(models.find((m) => m.id === "qwen3-4b")?.contextWindow).toBe(8192);
+    expect(models.find((m) => m.id === "glm-4.5-air")?.contextWindow).toBe(131072);
+  });
 });
 
-describe("add — thinkingFormat proposal and override", () => {
-  it("proposes the family heuristic and lets the user override it before write", async () => {
+describe("add — bounded dialog text for large batches (R4-010)", () => {
+  it("caps the batched context-window select title at 8 inline ids and appends '… and N more' for a 25-model Server", async () => {
+    const ids = Array.from({ length: 25 }, (_, i) => `model-${i}`);
     const ctx = fakeCtx();
-    ctx.editor.mockImplementation(async (title: string) => (title.includes("contextWindow") ? "32768" : "deepseek"));
-    const ports = basePorts();
+    ctx.select.mockImplementation(async (title: string) => (title.startsWith("Context window") ? "32k (32768)" : "mlx-serve"));
+    const ports = basePorts({ fetch: reachableFetch(ids) });
 
     await add("localhost:11234", ctx, ports);
 
-    expect(ctx.editor).toHaveBeenCalledWith(expect.stringContaining("thinkingFormat"), "qwen");
-    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
-    expect(written.providers["mlx-serve"].models[0].compat).toEqual({ thinkingFormat: "deepseek" });
+    const contextCall = ctx.select.mock.calls.find(([title]) => (title as string).startsWith("Context window"));
+    const title = contextCall?.[0] as string;
+    expect(title).toContain("and 17 more");
+    expect(title.length).toBeLessThan(300);
   });
 
-  it("keeps the heuristic proposal when the override editor is cancelled", async () => {
+  it("caps the batched reasoning confirm message at 8 inline pairs and appends '… and N more' for 25 family-matched models", async () => {
+    const ids = Array.from({ length: 25 }, (_, i) => `qwen3-model-${i}`);
     const ctx = fakeCtx();
-    ctx.editor.mockImplementation(async (title: string) => (title.includes("contextWindow") ? "32768" : undefined));
-    const ports = basePorts();
+    ctx.confirm.mockResolvedValue(true);
+    const ports = basePorts({ fetch: reachableFetch(ids) });
 
     await add("localhost:11234", ctx, ports);
 
-    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
-    expect(written.providers["mlx-serve"].models[0].compat).toEqual({ thinkingFormat: "qwen" });
+    expect(ctx.confirm).toHaveBeenCalledTimes(1);
+    const message = ctx.confirm.mock.calls[0][1] as string;
+    expect(message).toContain("and 17 more");
+    expect(message.length).toBeLessThan(400);
   });
+});
 
+describe("add — thinkingFormat proposal (family heuristic, no per-model override — v0.1.1 hotfix item 3c)", () => {
   it("omits thinkingFormat entirely for an unmatched family, without prompting for it", async () => {
     const ctx = fakeCtx();
     const ports = basePorts({ fetch: reachableFetch(["llama-3.1-8b"]) });
 
     await add("localhost:11234", ctx, ports);
 
-    expect(ctx.editor).not.toHaveBeenCalledWith(expect.stringContaining("thinkingFormat"), expect.anything());
+    expect(ctx.confirm).not.toHaveBeenCalled();
     const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
     expect(written.providers["mlx-serve"].models[0].compat).toBeUndefined();
     expect(written.providers["mlx-serve"].models[0].reasoning).toBeUndefined();
@@ -457,6 +530,78 @@ describe("add — reasoning becomes user-confirmed, never heuristic-derived (R3-
     expect(written.providers["mlx-serve"].models[0].reasoning).toBeUndefined();
     expect(written.providers["mlx-serve"].models[0].compat).toBeUndefined();
     expect(ctx.notify).toHaveBeenCalledWith(expect.stringContaining("qwen3-4b"), "warning");
+  });
+});
+
+describe("add — batched reasoning confirm across family-matched models (v0.1.1 hotfix item 3c)", () => {
+  it("accept: every family-matched model gets reasoning:true and its own family thinkingFormat, in one confirm", async () => {
+    const ctx = fakeCtx();
+    ctx.confirm.mockResolvedValue(true);
+    const ports = basePorts({ fetch: reachableFetch(["qwen3-4b", "glm-4.5-air"]) });
+
+    await add("localhost:11234", ctx, ports);
+
+    expect(ctx.confirm).toHaveBeenCalledTimes(1);
+    expect(ctx.confirm).toHaveBeenCalledWith(
+      expect.stringContaining("reasoning"),
+      expect.stringMatching(/qwen3-4b.*qwen.*glm-4\.5-air.*zai|glm-4\.5-air.*zai.*qwen3-4b.*qwen/),
+    );
+    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
+    const models: Array<{ id: string; reasoning?: boolean; compat?: { thinkingFormat?: string } }> = written.providers["mlx-serve"].models;
+    expect(models.find((m) => m.id === "qwen3-4b")).toMatchObject({ reasoning: true, compat: { thinkingFormat: "qwen" } });
+    expect(models.find((m) => m.id === "glm-4.5-air")).toMatchObject({ reasoning: true, compat: { thinkingFormat: "zai" } });
+  });
+
+  it("decline: NEITHER family-matched model gets reasoning or thinkingFormat, in one confirm", async () => {
+    const ctx = fakeCtx();
+    ctx.confirm.mockResolvedValue(false);
+    const ports = basePorts({ fetch: reachableFetch(["qwen3-4b", "glm-4.5-air"]) });
+
+    await add("localhost:11234", ctx, ports);
+
+    expect(ctx.confirm).toHaveBeenCalledTimes(1);
+    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
+    const models: Array<{ id: string; reasoning?: boolean; compat?: unknown }> = written.providers["mlx-serve"].models;
+    for (const model of models) {
+      expect(model.reasoning).toBeUndefined();
+      expect(model.compat).toBeUndefined();
+    }
+  });
+
+  it('nothink exclusion: a model with "nothink" (case-insensitive) in its id is auto-declined, not part of the confirm', async () => {
+    const ctx = fakeCtx();
+    ctx.confirm.mockResolvedValue(true);
+    const ports = basePorts({ fetch: reachableFetch(["qwen3-4b", "qwen3-4b-NoThink"]) });
+
+    await add("localhost:11234", ctx, ports);
+
+    // Only the real family candidate (qwen3-4b) drives the confirm; the
+    // nothink variant never appears in its message.
+    expect(ctx.confirm).toHaveBeenCalledWith(expect.stringContaining("reasoning"), expect.not.stringContaining("NoThink"));
+    expect(ctx.notify).toHaveBeenCalledWith(expect.stringContaining("qwen3-4b-NoThink"), "info");
+    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
+    const models: Array<{ id: string; reasoning?: boolean; compat?: unknown }> = written.providers["mlx-serve"].models;
+    const nothinkModel = models.find((m) => m.id === "qwen3-4b-NoThink");
+    expect(nothinkModel?.reasoning).toBeUndefined();
+    expect(nothinkModel?.compat).toBeUndefined();
+    expect(models.find((m) => m.id === "qwen3-4b")).toMatchObject({ reasoning: true, compat: { thinkingFormat: "qwen" } });
+  });
+
+  it("declared-capability bypass: a Server-declared reasoning model is verified directly, never joins the batch confirm", async () => {
+    const ctx = fakeCtx();
+    const ports = basePorts({
+      fetch: reachableFetch(["qwen3-4b", "glm-4.5-air"]),
+      fetchVModels: vi.fn(async () => ({ "qwen3-4b": { max_model_len: 8192, capabilities: ["reasoning"] } })),
+    });
+
+    await add("localhost:11234", ctx, ports);
+
+    // Only glm-4.5-air (undeclared, family-matched) drives the batch confirm.
+    expect(ctx.confirm).toHaveBeenCalledTimes(1);
+    expect(ctx.confirm).toHaveBeenCalledWith(expect.stringContaining("reasoning"), expect.not.stringContaining("qwen3-4b"));
+    const written = JSON.parse((ports.writer.ports as WriterPorts & { files: Record<string, string> }).files["/pi/agent/models.json"]);
+    const models: Array<{ id: string; reasoning?: boolean; compat?: { thinkingFormat?: string } }> = written.providers["mlx-serve"].models;
+    expect(models.find((m) => m.id === "qwen3-4b")).toMatchObject({ reasoning: true, compat: { thinkingFormat: "qwen" } });
   });
 });
 
@@ -599,6 +744,28 @@ describe("add — WriteOutcome rendering (every kind gets a distinct message)", 
     await add("localhost:11234", ctx, ports);
 
     expect(ctx.notify).toHaveBeenCalledWith(expect.stringMatching(/restored/i), "error");
+  });
+
+  it("restored + verified: says the backup restored and verified, not a false failure (v0.1.1 hotfix item 2)", async () => {
+    // Reproduces the live E2E bug: models.json restored to a byte-identical
+    // backup, but the old post-restore check re-verified against the NEW
+    // models that were just rolled back — always absent post-restore — so it
+    // always reported "Restore verification failed" even here, on a genuinely
+    // perfect restore.
+    const existingFile = JSON.stringify({ providers: {} });
+    const ctx = fakeCtx();
+    const writer = fakeWriterPorts(
+      { "/pi/agent/models.json": existingFile },
+      {
+        verify: async (_providerKey: string, modelIds: string[]) =>
+          modelIds.length === 0 ? { ok: true as const } : { ok: false as const, error: "empty provider map" },
+      },
+    );
+    const ports = basePorts({ writer: { path: "/pi/agent/models.json", ports: writer } });
+
+    await add("localhost:11234", ctx, ports);
+
+    expect(ctx.notify).toHaveBeenCalledWith(expect.stringContaining("Backup restored and verified"), "error");
   });
 
   it("rolled-back: notifies distinctly when no backup existed to restore", async () => {

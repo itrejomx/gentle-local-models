@@ -57,6 +57,55 @@ Both paths resolve to the same `extensions/local-models/index.ts` entry point.
 
 ## Known v0.1 limitations (read before debugging)
 
+### Server kind is auto-detected but still a real choice (v0.1.1)
+
+`add` preselects the Server-kind picker from `/v1/models`' `owned_by` field
+(`llama-swap`, `mtplx`, `mlx-serve`, `omlx` map to their matching kind;
+anything else — including a missing `owned_by` — falls back to `generic`,
+shown first in the list). The picker still opens and any kind can be picked
+instead; cancelling aborts registration exactly as before.
+
+### Context-window and reasoning prompts are batched per `add` run (v0.1.1)
+
+Registering a Server with many models used to prompt once per model for both
+`contextWindow` and reasoning confirmation — on a 25-model Server that meant
+dozens of dialogs in a row. As of v0.1.1:
+
+- **contextWindow**: every model still gets resolved from the same source
+  chain first (`verificado`, unchanged). If any are left unresolved, ONE
+  picker appears — `32k`, `64k`, `128k`, `192k`, `256k`, or `Custom…`
+  (prefilled `32768`, editable) — and the chosen value applies to every
+  unresolved model, labeled `declarado`. Cancelling, or an invalid `Custom…`
+  answer, falls back to `placeholder` for all of them (same as before).
+- **reasoning**: a Server-declared capability is still verified directly, no
+  prompt. A model id containing `nothink` (case-insensitive) is now
+  auto-declined — no prompt, reported in its own notice — since it explicitly
+  signals a non-thinking variant. Every remaining family-matched model is
+  offered in ONE confirm ("Mark N models as reasoning models with
+  thinkingFormat per family? ..."); accepting sets `reasoning` and
+  `thinkingFormat` on all of them, declining sets neither on any of them.
+
+**Removed in this batching**: the per-model `thinkingFormat` override editor
+that used to follow each individual reasoning confirm. In v0.1.1 there is no
+way to pick a `thinkingFormat` other than the family heuristic through
+`add` — accept applies the heuristic to every candidate, decline applies it
+to none. To use a different value today, edit `models.json` by hand after
+registration (fill-never-overwrite will never touch it again once set). A
+v0.2 refinement is planned to reintroduce a per-model override, most likely
+via a targeted re-add of a single model.
+
+### A Provider missing `api` gets it filled, new or existing (v0.1.1)
+
+Pi's provider composer requires `api` (e.g. `"openai-completions"`) at the
+Provider level or on every one of its models to resolve requests; a Provider
+missing it entirely makes Pi report a composition error for the whole
+registry. `add` fills `api: "openai-completions"` onto the Provider-level
+field whenever it is absent — whether the Provider is brand new or one this
+plugin (or you, by hand) already wrote without it — self-healing that
+Provider the next time you re-run `add` against it. An existing Provider
+that already carries `api` (any value) is never touched, per
+fill-never-overwrite.
+
 ### `LLAMA_SWAP_CONFIG_PATH`
 
 `context.ts`'s third context-resolution source reads llama-swap's own
@@ -113,7 +162,7 @@ visible in `gentle-local-models.json`:
 | Label | Meaning |
 |---|---|
 | `verificado` | Read from the Server's own ground truth: `/v1/models`, `/props`, or the `config.yaml` that launched it. |
-| `declarado` | Typed by you at the interactive prompt (pre-filled with `32768`, editable). |
+| `declarado` | Chosen by you at the batched interactive prompt: one of the presets (`32k`/`64k`/`128k`/`192k`/`256k`) or `Custom…` (opens an editor pre-filled with `32768`, editable). |
 | `placeholder` | No source resolved and no prompt was possible (non-interactive run) — `contextWindow` was omitted entirely. |
 
 If a model's *declared* `contextWindow` is larger than what the Server can

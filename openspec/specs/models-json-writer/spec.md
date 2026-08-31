@@ -8,8 +8,15 @@ validation, and explicit prune.
 
 ### Requirement: Fill-never-overwrite merge
 The system MUST NOT overwrite existing `name`, `contextWindow`, `maxTokens`,
-`reasoning`, `input`, or `compat` fields; it MUST only fill missing fields
-with conservative defaults; new models MUST be added with `name = id`.
+`reasoning`, `input`, `compat`, or `api` fields; it MUST only fill missing
+fields with conservative defaults; new models MUST be added with `name = id`;
+the target Provider — new OR existing — MUST be written with
+`api: "openai-completions"` at the Provider level whenever it is absent
+there, since Pi's provider composer requires `api` at the Provider or Model
+level to resolve requests (`core/provider-composer.js:48-52`); every commit
+MUST also enforce that requirement (Provider-level `api` OR `api` on every
+one of its models) for the Provider it is writing, whether newly created or
+pre-existing.
 
 #### Scenario: Existing values preserved, missing values filled
 - GIVEN a model with `contextWindow` already set and `maxTokens` missing,

@@ -36,6 +36,30 @@ describe("probe", () => {
     );
   });
 
+  it("captures owned_by from the first entry that declares it, for add's kind auto-detect (v0.1.1 hotfix item 3a)", async () => {
+    const fetchFn: FetchLike = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: [{ id: "qwen3-4b", owned_by: "llama-swap" }, { id: "glm-4.5-air" }] }),
+    })) as unknown as FetchLike;
+
+    const result = await probe(fetchFn, "http://localhost:8080/v1");
+
+    expect(result).toMatchObject({ status: "reachable", ownedBy: "llama-swap" });
+  });
+
+  it("leaves ownedBy undefined when no entry declares it", async () => {
+    const fetchFn: FetchLike = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ data: [{ id: "qwen3-4b" }] }),
+    })) as unknown as FetchLike;
+
+    const result = await probe(fetchFn, "http://localhost:8080/v1");
+
+    expect(result).toEqual({ status: "reachable", baseUrl: "http://localhost:8080/v1", models: ["qwen3-4b"] });
+  });
+
   it("filters out model entries without a string id (semi-conformant /v1/models), keeping only valid ones (R3-003)", async () => {
     const fetchFn: FetchLike = vi.fn(async () => ({
       ok: true,

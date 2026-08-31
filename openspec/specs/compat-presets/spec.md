@@ -26,11 +26,31 @@ writing, and MUST NOT set it at the Provider level.
   WHEN presets are applied, THEN each model gets its own family-matched
   `thinkingFormat` and no Provider-level `thinkingFormat` is set.
 
-### Requirement: Per-model override before write
-The system MUST let the user override the proposed `thinkingFormat` for any
-model before the write occurs.
+### Requirement: Reasoning confirm is batched, not per-model
+For v0.1.1, the system MUST confirm reasoning/thinkingFormat proposals for
+every family-matched, undeclared model in ONE confirm per `add` run instead
+of one dialog per model. Accepting sets `reasoning: true` and the
+family-matched `thinkingFormat` on every candidate; declining sets neither
+field on any of them. A per-model override control is deferred to v0.2 — for
+v0.1.1, overriding a specific model requires re-running `add` for that
+Server.
 
-#### Scenario: User overrides the heuristic
-- GIVEN a proposed `thinkingFormat` the user disagrees with, WHEN the user
-  overrides it before confirming, THEN the overridden value is written
-  instead of the heuristic's.
+#### Scenario: Mixed-family batch confirm
+- GIVEN a `llama-swap` Server serving both a `qwen*` and a `glm*` model,
+  WHEN the user accepts the one batched confirm, THEN both models are
+  written with `reasoning: true` and their own family-matched
+  `thinkingFormat`; declining leaves neither field set on either model.
+
+### Requirement: `nothink` in a model id auto-declines the reasoning proposal
+A model id containing `nothink` (case-insensitive) MUST be excluded from the
+reasoning proposal entirely — no confirm, `reasoning` and `thinkingFormat`
+both omitted — and MUST be listed in a notice distinct from the batch
+confirm. This check runs before the family-heuristic match and does not
+apply to a Server-declared reasoning capability, which is verified
+regardless of the id.
+
+#### Scenario: nothink variant excluded from the batch
+- GIVEN a Server serving both `qwen3-4b` and `qwen3-4b-nothink`, WHEN `add`
+  proposes reasoning, THEN only `qwen3-4b` is offered in the batch confirm
+  and `qwen3-4b-nothink` is reported separately, with neither `reasoning`
+  nor `thinkingFormat` set on it.

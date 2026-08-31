@@ -83,6 +83,22 @@ export interface WriterPorts {
   deleteFile(path: string): Promise<void>;
   listBackups(path: string): Promise<string[]>;
   now(): number;
+  /**
+   * Confirms a write landed, via Pi's own model-registry read-back. Two call
+   * conventions (v0.1.1 hotfix item 2 documents both explicitly):
+   * - `verifyWritten(providerKey, modelIds)` — a SPECIFIC-model check: refresh,
+   *   then confirm every one of `modelIds` is now found under `providerKey`.
+   *   Used only right after a MERGE write, where those models are expected to
+   *   exist in the result (`commit()`'s primary post-write verify).
+   * - `verifyWritten("", [])` — a GENERIC "did the file load cleanly" check:
+   *   refresh and report only whether the refresh itself errored, with no
+   *   per-model lookup. Used for `commitPrune`'s post-write verify (models
+   *   were just REMOVED, so checking for their presence would prove nothing)
+   *   AND for the post-RESTORE re-verify after any recovery (the models from
+   *   the failed write were rolled back and can never be found — checking for
+   *   them there would always report a false failure, never proof the
+   *   restored file is good).
+   */
   verifyWritten(providerKey: string, modelIds: string[]): Promise<{ ok: true } | { ok: false; error: string }>;
 }
 
@@ -224,6 +240,27 @@ export function mergeProvider(existingRaw: unknown, providerKey: string, input: 
   const providers = asObject(file.providers);
   const provider = asObject(providers[providerKey]);
 
+  // v0.1.1 hotfix item 1, extended by the PR11 rider batch: Pi's provider
+  // composer requires `api` at the Provider or Model level to resolve
+  // requests (live E2E: "no \"api\" specified"). Fill it whenever the
+  // Provider-level `api` is absent — NEW or EXISTING alike — never only when
+  // the models each already declare their own `api` (fill-never-overwrite's
+  // own contract only cares whether the field is absent, not whether some
+  // other field would have made it unnecessary). An EXISTING Provider that
+  // already carries `api` (any value) is left byte-for-byte untouched, per
+  // fill-never-overwrite (R2).
+  //
+  // Rationale for filling an EXISTING api-less Provider too: a pre-v0.1.1
+  // write (or a hand-curated Provider that happens to omit `api`) leaves
+  // Pi's registry reporting a composition error on every load, so every
+  // subsequent plugin write against that same Provider key would end in a
+  // confusing restore (verifyWritten fails because the whole registry never
+  // composed). Filling the missing field is exactly this merge's own "fill"
+  // case (R2) and self-heals that Provider the next time it is written.
+  if (provider.api === undefined) {
+    provider.api = "openai-completions";
+  }
+
   if (provider.baseUrl === undefined && input.baseUrl !== undefined) {
     provider.baseUrl = input.baseUrl;
   }
@@ -304,6 +341,10 @@ const ModelEntrySchema = Type.Object({
   reasoning: Type.Optional(Type.Boolean()),
   input: Type.Optional(Type.Array(Type.Union([Type.Literal("text"), Type.Literal("image")]))),
   compat: Type.Optional(ModelCompatSchema),
+  // v0.1.1 hotfix item 1: Pi's provider composer accepts `api` at either the
+  // Provider or the Model level; declared here for mirror accuracy even
+  // though the permissive schema already tolerated it unlisted.
+  api: Type.Optional(Type.String({ minLength: 1 })),
 });
 
 const ProviderSchema = Type.Object({
@@ -315,6 +356,8 @@ const ProviderSchema = Type.Object({
   // additionalProperties: false) already tolerated them unlisted.
   headers: Type.Optional(Type.Record(Type.String(), Type.String())),
   authHeader: Type.Optional(Type.Boolean()),
+  // v0.1.1 hotfix item 1: required by Pi's provider composer (see ModelEntrySchema.api above).
+  api: Type.Optional(Type.String({ minLength: 1 })),
   models: Type.Optional(Type.Array(ModelEntrySchema)),
 });
 
@@ -363,13 +406,54 @@ export function listProviders(raw: string | undefined): ProviderEntry[] {
   });
 }
 
-/** Pre-write validation (R2) against the mirrored schema. File-shape only — see module header for scope. */
-export function validate(file: unknown): { ok: true } | { ok: false; errors: string[] } {
-  if (validator.Check(file)) {
-    return { ok: true };
+/**
+ * Pre-write validation (R2) against the mirrored schema. File-shape only —
+ * see module header for scope.
+ *
+ * `strictProviderKeys` (v0.1.1 hotfix item 1, extended by the PR11 rider
+ * batch) adds one extra, targeted check on top of the permissive structural
+ * mirror: for each listed Provider key — the one THIS write is committing,
+ * new or existing — every one of its models must resolve an `api`
+ * (Provider-level `api`, or that specific model's own `api`). This is
+ * exactly Pi's real provider-composer requirement (`api` at the Provider
+ * level OR on every model, `core/provider-composer.js:48-52`), applied on
+ * every commit rather than only for brand-new Providers, since
+ * `mergeProvider`'s own fill (above) already guarantees this for any
+ * Provider it can reach — this check is a targeted backstop, not a
+ * behavior-changing gate, for whichever Provider key this write touches. A
+ * Provider NOT listed here (untouched by this write) is never held to this
+ * check, even if it lacks `api` entirely — the mirror stays exactly as
+ * permissive as before for everyone else.
+ */
+export function validate(
+  file: unknown,
+  strictProviderKeys: string[] = [],
+): { ok: true } | { ok: false; errors: string[] } {
+  if (!validator.Check(file)) {
+    const errors = [...validator.Errors(file)].map((error) => `${error.instancePath || "root"}: ${error.message}`);
+    return { ok: false, errors };
   }
-  const errors = [...validator.Errors(file)].map((error) => `${error.instancePath || "root"}: ${error.message}`);
-  return { ok: false, errors };
+
+  const providers = asObject(asObject(file).providers);
+  const errors: string[] = [];
+  for (const providerKey of strictProviderKeys) {
+    const provider = asObject(providers[providerKey]);
+    const providerHasApi = typeof provider.api === "string" && provider.api.length > 0;
+    const models = asArray(provider.models).map((m) => asObject(m));
+    for (const model of models) {
+      const modelHasApi = typeof model.api === "string" && model.api.length > 0;
+      if (!providerHasApi && !modelHasApi) {
+        errors.push(
+          `Provider "${providerKey}", model "${model.id}": missing "api" (required by Pi's provider composer) at the Provider or Model level`,
+        );
+      }
+    }
+  }
+
+  if (errors.length > 0) {
+    return { ok: false, errors };
+  }
+  return { ok: true };
 }
 
 function warnUnknownKeys(compatRaw: unknown, known: Set<string>, label: string, warnings: string[]): void {
@@ -549,7 +633,10 @@ export async function commit(
 
   const merged = mergeProvider(existing, providerKey, input);
 
-  const validation = validate(merged);
+  // PR11 rider batch item 1: the strict api requirement is checked for the
+  // target `providerKey` on every commit — new or existing — not only when
+  // this write is creating it brand new. See validate()'s JSDoc.
+  const validation = validate(merged, [providerKey]);
   if (!validation.ok) {
     return { kind: "invalid", errors: validation.errors, backups: await listBackupsSafely(ports, path) };
   }
@@ -573,14 +660,7 @@ export async function commit(
     // A rejecting main write can still leave `path` partially written by a
     // non-atomic port (see WriterPorts.writeFile's atomicity contract, D) —
     // attempt a restore rather than trust whatever is now on disk (C).
-    return recoverFromFailedWrite(
-      ports,
-      path,
-      providerKey,
-      modelIds,
-      `main write failed: ${errorMessage(error)}`,
-      backupPath,
-    );
+    return recoverFromFailedWrite(ports, path, `main write failed: ${errorMessage(error)}`, backupPath);
   }
 
   let verification: { ok: true } | { ok: false; error: string };
@@ -591,7 +671,7 @@ export async function commit(
   }
 
   if (!verification.ok) {
-    return recoverFromFailedWrite(ports, path, providerKey, modelIds, verification.error, backupPath);
+    return recoverFromFailedWrite(ports, path, verification.error, backupPath);
   }
 
   return { kind: "written", backup: backupPath, lint: lintWarnings };
@@ -674,7 +754,7 @@ export async function commitPrune(ports: WriterPorts, path: string, removals: Pr
   try {
     await ports.writeFile(path, JSON.stringify(merged, null, 2));
   } catch (error) {
-    return recoverFromFailedWrite(ports, path, "", [], `main write failed: ${errorMessage(error)}`, backupPath);
+    return recoverFromFailedWrite(ports, path, `main write failed: ${errorMessage(error)}`, backupPath);
   }
 
   let verification: { ok: true } | { ok: false; error: string };
@@ -685,7 +765,7 @@ export async function commitPrune(ports: WriterPorts, path: string, removals: Pr
   }
 
   if (!verification.ok) {
-    return recoverFromFailedWrite(ports, path, "", [], verification.error, backupPath);
+    return recoverFromFailedWrite(ports, path, verification.error, backupPath);
   }
 
   return { kind: "written", backup: backupPath, lint: lintWarnings };
@@ -700,12 +780,18 @@ export async function commitPrune(ports: WriterPorts, path: string, removals: Pr
  * If the restore machinery itself throws (C), that becomes a `write-failed`
  * outcome instead of escaping — the main write already landed in `path`,
  * unconfirmed, and recovery could not even be attempted.
+ *
+ * v0.1.1 hotfix item 2: the post-restore re-verify ALWAYS uses the generic
+ * `verifyWritten("", [])` convention (see `WriterPorts.verifyWritten`'s
+ * JSDoc) — never a specific-model check for the models the FAILED write was
+ * trying to add. Those models were just rolled back by the restore above,
+ * so they can never be found; checking for them here reported a false
+ * "Restore verification failed" on every restore, even a byte-identical one
+ * (the exact live E2E symptom this hotfix fixes).
  */
 async function recoverFromFailedWrite(
   ports: WriterPorts,
   path: string,
-  providerKey: string,
-  modelIds: string[],
   triggeringError: string,
   backupPath: string | undefined,
 ): Promise<WriteOutcome> {
@@ -738,10 +824,11 @@ async function recoverFromFailedWrite(
   // Successful restore (D3): refresh again and report that second
   // verification's result too — a successful restore is not itself proof
   // the restored content is good. A throwing re-verify is itself caught so
-  // this final stage cannot leak an exception either.
+  // this final stage cannot leak an exception either. Generic check ("", []) —
+  // see this function's JSDoc and WriterPorts.verifyWritten's contract.
   let verification: { ok: true } | { ok: false; error: string };
   try {
-    verification = await ports.verifyWritten(providerKey, modelIds);
+    verification = await ports.verifyWritten("", []);
   } catch (error) {
     verification = { ok: false, error: `verifyWritten threw: ${errorMessage(error)}` };
   }

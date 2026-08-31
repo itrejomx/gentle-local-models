@@ -7,7 +7,15 @@
 
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { isLocalHost, normalize, probe, probeAll, type FetchLike } from "./detect.ts";
-import { matchedFamily, provider, thinking, type ServerKind, type ThinkingFormat } from "./presets.ts";
+import {
+  CONTEXT_WINDOW_PRESETS,
+  DIALOG_ID_LIMIT,
+  kindFromOwnedBy,
+  provider,
+  thinking,
+  type ServerKind,
+  type ThinkingFormat,
+} from "./presets.ts";
 import { resolve as resolveContext, type ContextPorts, type PropsFields, type VModelsFields } from "./context.ts";
 import {
   commit,
@@ -31,13 +39,27 @@ import {
   type StatePorts,
 } from "./state.ts";
 import { selectFromList } from "./ui/select-list.ts";
-import { editSetting, toggleSetting } from "./ui/settings-list.ts";
+import { toggleSetting } from "./ui/settings-list.ts";
 import { withLoader } from "./ui/bordered-loader.ts";
 import { promptWithPrefill } from "./ui/prompt.ts";
 import { notify } from "./ui/notify.ts";
 import { modelsJsonPath, realContextPorts, realFetchProps, realFetchVModels, realStatePorts, realWriterPorts, stateJsonPath } from "./ports.ts";
 
 const SERVER_KINDS: ServerKind[] = ["mtplx", "omlx", "mlx-serve", "llama-swap", "generic"];
+
+const CUSTOM_CONTEXT_WINDOW_OPTION = "Custom…";
+
+/**
+ * Joins `items` for inline display in a dialog title/message, bounded at
+ * `DIALOG_ID_LIMIT` entries — beyond that, appends "… and N more" instead of
+ * listing every remaining entry (R4-010).
+ */
+function boundedJoin(items: string[], limit = DIALOG_ID_LIMIT): string {
+  if (items.length <= limit) {
+    return items.join(", ");
+  }
+  return `${items.slice(0, limit).join(", ")} … and ${items.length - limit} more`;
+}
 
 /** Provider keys that `omlx launch pi` / `mtplx start pi` rewrite wholesale (spec R1, WAYFINDER.md). */
 const REWRITTEN_PROVIDER_KEYS: Partial<Record<ServerKind, string>> = {
@@ -97,8 +119,10 @@ function renderOutcome(outcome: WriteOutcome, writerPath: string): { message: st
       };
     case "restored":
       return {
-        message: `Write failed (${outcome.error}). Restored backup ${outcome.path}. ${
-          outcome.verification.ok ? "Restore verified." : `Restore verification failed: ${outcome.verification.error}`
+        message: `Write failed (${outcome.error}). ${
+          outcome.verification.ok
+            ? `Backup restored and verified: ${outcome.path}.`
+            : `Restored backup ${outcome.path}, but the restored file failed to load: ${outcome.verification.error}.`
         }`,
         type: "error",
       };
@@ -162,7 +186,12 @@ export async function add(input: string, ctx: AddContext, ports: AddPorts): Prom
     return;
   }
 
-  const kind = (await selectFromList(ctx.ui, "Server kind", SERVER_KINDS)) as ServerKind | undefined;
+  // v0.1.1 hotfix item 3a: preselect the kind the Server itself declared via
+  // /v1/models' owned_by — shown first in the picker, still overridable. A
+  // cancel aborts exactly as before.
+  const detectedKind = kindFromOwnedBy(probeResult.ownedBy);
+  const orderedKinds = [detectedKind, ...SERVER_KINDS.filter((k) => k !== detectedKind)];
+  const kind = (await selectFromList(ctx.ui, "Server kind", orderedKinds)) as ServerKind | undefined;
   if (kind === undefined) {
     notify(ctx.ui, "Registration cancelled.", "info");
     return;
@@ -199,96 +228,160 @@ export async function add(input: string, ctx: AddContext, ports: AddPorts): Prom
       }))
     : { vModels: {} as Record<string, VModelsFields>, props: undefined as PropsFields | undefined };
 
-  const models: ModelInput[] = [];
-  const labels: Record<string, ModelLabel> = {};
-  const placeholderModels: string[] = [];
-  const reasoningUnconfirmedModels: string[] = [];
+  // v0.1.1 hotfix item 3b: resolve every model through context.resolve
+  // first (D-005 unchanged); collect the ones left `unresolved` for ONE
+  // batched prompt below instead of one dialog per model.
+  const contextOutcomes = new Map<string, { contextWindow?: number; label?: ModelLabel }>();
+  const unresolvedModels: string[] = [];
 
   for (const modelId of probeResult.models) {
     const already = existingModelIn(existingRaw, providerKey, modelId);
-    let contextWindow: number | undefined;
+    if (already?.contextWindow !== undefined) {
+      // D-005: never call resolveContext, never write a new label — the
+      // merge below preserves whatever label already lived in state.
+      contextOutcomes.set(modelId, {});
+      continue;
+    }
 
-    if (already?.contextWindow === undefined) {
-      const resolution = await resolveContext(modelId, { vModels: vModels[modelId], props }, ports.contextPorts);
-      if (resolution.kind === "resolved") {
-        contextWindow = resolution.value;
-        labels[modelId] = { contextLabel: resolution.label, contextSource: resolution.source };
+    const resolution = await resolveContext(modelId, { vModels: vModels[modelId], props }, ports.contextPorts);
+    if (resolution.kind === "resolved") {
+      contextOutcomes.set(modelId, {
+        contextWindow: resolution.value,
+        label: { contextLabel: resolution.label, contextSource: resolution.source },
+      });
+    } else {
+      unresolvedModels.push(modelId);
+    }
+  }
+
+  const placeholderModels: string[] = [];
+
+  if (unresolvedModels.length > 0 && ctx.hasUI) {
+    const title = `Context window for ${unresolvedModels.length} model${unresolvedModels.length === 1 ? "" : "s"} without a source: ${boundedJoin(unresolvedModels)}`;
+    const options = [...CONTEXT_WINDOW_PRESETS.map((preset) => preset.label), CUSTOM_CONTEXT_WINDOW_OPTION];
+    const choice = await selectFromList(ctx.ui, title, options);
+
+    let appliedValue: number | undefined;
+    if (choice === CUSTOM_CONTEXT_WINDOW_OPTION) {
+      // D-006/D-007: promptWithPrefill resolves to `undefined` on editor
+      // cancellation — same placeholder path as an invalid answer below.
+      const answer = await promptWithPrefill(ctx, `contextWindow — ${unresolvedModels.length} model(s)`, "32768");
+      // R3-016: validate the answer — empty, non-numeric, NaN, zero, or
+      // negative is treated EXACTLY like cancel (never a silent "declarado 0"
+      // or "declarado NaN"), plus a notify naming the rejected input.
+      const trimmed = answer?.trim();
+      const parsed = trimmed ? Number(trimmed) : NaN;
+      const isValidPositive = trimmed !== undefined && trimmed !== "" && Number.isFinite(parsed) && parsed > 0;
+      if (isValidPositive) {
+        appliedValue = parsed;
+      } else if (answer !== undefined) {
+        notify(
+          ctx.ui,
+          `contextWindow answer "${answer}" is not a valid positive integer for: ${unresolvedModels.join(", ")} — using placeholder instead.`,
+          "warning",
+        );
+      }
+    } else if (choice !== undefined) {
+      appliedValue = CONTEXT_WINDOW_PRESETS.find((preset) => preset.label === choice)?.value;
+    }
+    // `choice === undefined` (cancelled at the select) falls straight
+    // through to the placeholder path below, same as an invalid Custom answer.
+
+    for (const modelId of unresolvedModels) {
+      if (appliedValue !== undefined) {
+        contextOutcomes.set(modelId, {
+          contextWindow: appliedValue,
+          label: { contextLabel: "declarado" as ContextLabel, contextSource: "prompt" },
+        });
       } else {
-        // D-006/D-007: promptWithPrefill already resolves to `undefined`
-        // both on editor cancellation AND when `!ctx.hasUI` (no dialog
-        // attempted) — both cases take this SAME placeholder path.
-        const answer = await promptWithPrefill(ctx, `contextWindow — ${modelId}`, "32768");
-        // R3-016: validate the answer — empty, non-numeric, NaN, zero, or
-        // negative is treated EXACTLY like cancel/non-interactive (never a
-        // silent "declarado 0" or "declarado NaN"), plus a notify naming the
-        // rejected input so the user knows why it was rejected.
-        const trimmed = answer?.trim();
-        const parsed = trimmed ? Number(trimmed) : NaN;
-        const isValidPositive = trimmed !== undefined && trimmed !== "" && Number.isFinite(parsed) && parsed > 0;
-        if (isValidPositive) {
-          contextWindow = parsed;
-          labels[modelId] = { contextLabel: "declarado" as ContextLabel, contextSource: "prompt" };
-        } else {
-          placeholderModels.push(modelId);
-          labels[modelId] = { contextLabel: "placeholder" as ContextLabel, contextSource: "none" };
-          if (answer !== undefined) {
-            notify(
-              ctx.ui,
-              `contextWindow answer "${answer}" for ${modelId} is not a valid positive integer — using placeholder instead.`,
-              "warning",
-            );
-          }
-        }
+        placeholderModels.push(modelId);
+        contextOutcomes.set(modelId, { label: { contextLabel: "placeholder" as ContextLabel, contextSource: "none" } });
       }
     }
-    // D-005: `already.contextWindow` is defined — never call resolveContext,
-    // never write a new label; `labels` simply has no entry for this model,
-    // and the merge below preserves whatever label already lived in state.
+  } else if (unresolvedModels.length > 0) {
+    // !ctx.hasUI: no dialog attempted, same omit+placeholder path (D-007).
+    for (const modelId of unresolvedModels) {
+      placeholderModels.push(modelId);
+      contextOutcomes.set(modelId, { label: { contextLabel: "placeholder" as ContextLabel, contextSource: "none" } });
+    }
+  }
 
-    // R3-015: reasoning is user-confirmed, never heuristic-derived.
-    // (a) Server-declared capability (e.g. mlx-serve's /v1/models
-    //     "capabilities") ⇒ reasoning is verified, not proposed — no confirm.
-    // (b) family-matched but undeclared ⇒ ONE confirm step sets BOTH
-    //     reasoning and thinkingFormat together; decline sets NEITHER.
-    // (c) no family match ⇒ nothing proposed, as today.
-    const declaredReasoning = vModels[modelId]?.capabilities?.includes("reasoning") === true;
+  // v0.1.1 hotfix item 3c: reasoning is still user-confirmed, never
+  // heuristic-derived, but confirmed in ONE batch instead of per model.
+  // (a) Server-declared capability (e.g. mlx-serve's /v1/models
+  //     "capabilities") ⇒ reasoning is verified, not proposed — no confirm.
+  // (b) `nothink` (case-insensitive) in the id ⇒ auto-declined, no confirm,
+  //     listed in a notice — an explicit non-thinking variant.
+  // (c) remaining family-matched models ⇒ ONE confirm covers all of them;
+  //     accept sets reasoning + thinkingFormat for every one, decline sets
+  //     neither for any of them.
+  // (d) no family match ⇒ nothing proposed, as before.
+  const declaredReasoningIds = new Set<string>();
+  const nothinkModels: string[] = [];
+  const familyCandidates: Array<{ id: string; thinkingFormat: ThinkingFormat }> = [];
+  const reasoningUnconfirmedModels: string[] = [];
+
+  for (const modelId of probeResult.models) {
+    if (vModels[modelId]?.capabilities?.includes("reasoning") === true) {
+      declaredReasoningIds.add(modelId);
+      continue;
+    }
+    if (modelId.toLowerCase().includes("nothink")) {
+      nothinkModels.push(modelId);
+      continue;
+    }
     const heuristic = thinking(modelId, true);
+    if (heuristic !== undefined) {
+      familyCandidates.push({ id: modelId, thinkingFormat: heuristic });
+    }
+  }
+
+  const acceptedFamilyIds = new Set<string>();
+  if (familyCandidates.length > 0) {
+    if (ctx.hasUI) {
+      const pairs = boundedJoin(familyCandidates.map((c) => `${c.id} → ${c.thinkingFormat}`));
+      const accepted = await toggleSetting(
+        ctx.ui,
+        "Mark reasoning models",
+        `Mark ${familyCandidates.length} model${familyCandidates.length === 1 ? "" : "s"} as reasoning models with thinkingFormat per family? ${pairs}`,
+      );
+      if (accepted) {
+        for (const candidate of familyCandidates) {
+          acceptedFamilyIds.add(candidate.id);
+        }
+      }
+    } else {
+      reasoningUnconfirmedModels.push(...familyCandidates.map((c) => c.id));
+    }
+  }
+
+  if (nothinkModels.length > 0) {
+    notify(ctx.ui, `reasoning auto-declined (id contains "nothink") for: ${nothinkModels.join(", ")}.`, "info");
+  }
+
+  const familyFormatById = new Map(familyCandidates.map((c) => [c.id, c.thinkingFormat] as const));
+  const models: ModelInput[] = [];
+  const labels: Record<string, ModelLabel> = {};
+
+  for (const modelId of probeResult.models) {
+    const contextOutcome = contextOutcomes.get(modelId);
+    if (contextOutcome?.label !== undefined) {
+      labels[modelId] = contextOutcome.label;
+    }
+
     let reasoning: boolean | undefined;
     let thinkingFormat: ThinkingFormat | undefined;
-
-    if (declaredReasoning) {
+    if (declaredReasoningIds.has(modelId)) {
       reasoning = true;
-      thinkingFormat = heuristic;
-      if (heuristic !== undefined && ctx.hasUI) {
-        const edited = await editSetting(ctx.ui, `thinkingFormat — ${modelId}`, heuristic);
-        if (edited !== undefined && edited !== "") {
-          thinkingFormat = edited as ThinkingFormat;
-        }
-      }
-    } else if (heuristic !== undefined) {
-      if (ctx.hasUI) {
-        const family = matchedFamily(modelId) ?? heuristic;
-        const accepted = await toggleSetting(
-          ctx.ui,
-          `reasoning — ${modelId}`,
-          `Model ${modelId} looks like a ${family} reasoning model. Mark reasoning + thinkingFormat ${heuristic}?`,
-        );
-        if (accepted) {
-          reasoning = true;
-          thinkingFormat = heuristic;
-          const edited = await editSetting(ctx.ui, `thinkingFormat — ${modelId}`, heuristic);
-          if (edited !== undefined && edited !== "") {
-            thinkingFormat = edited as ThinkingFormat;
-          }
-        }
-      } else {
-        reasoningUnconfirmedModels.push(modelId);
-      }
+      thinkingFormat = thinking(modelId, true);
+    } else if (acceptedFamilyIds.has(modelId)) {
+      reasoning = true;
+      thinkingFormat = familyFormatById.get(modelId);
     }
 
     models.push({
       id: modelId,
-      contextWindow,
+      contextWindow: contextOutcome?.contextWindow,
       reasoning,
       compat: thinkingFormat !== undefined ? { thinkingFormat } : undefined,
     });

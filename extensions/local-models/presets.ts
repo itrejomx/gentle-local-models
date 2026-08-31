@@ -82,3 +82,54 @@ export function thinking(
 export function matchedFamily(modelId: string): string | undefined {
   return matchFamilyPrefix(modelId)?.[0];
 }
+
+// v0.1.1 hotfix item 3a: maps a Server's /v1/models `owned_by` field to a
+// ServerKind for `add`'s kind auto-detect. Data-driven (R3): any owned_by
+// value outside this known set — including a missing one — falls back to
+// "generic" rather than guessing.
+const OWNED_BY_KIND: Readonly<Record<string, ServerKind>> = {
+  "llama-swap": "llama-swap",
+  mtplx: "mtplx",
+  "mlx-serve": "mlx-serve",
+  omlx: "omlx",
+};
+
+// v0.1.1 hotfix item 3b: named so v0.2 can extend the option table. Each
+// option applies its exact token value to every model still `unresolved`
+// after context.resolve — no per-model prompting (see index.ts `add`'s
+// batched context-window prompt).
+export const CONTEXT_WINDOW_PRESETS: ReadonlyArray<{ label: string; value: number }> = [
+  { label: "32k (32768)", value: 32768 },
+  { label: "64k (65536)", value: 65536 },
+  { label: "128k (131072)", value: 131072 },
+  { label: "192k (196608)", value: 196608 },
+  { label: "256k (262144)", value: 262144 },
+];
+
+// R4-010 (PR11 rider batch): caps how many ids/pairs a batched dialog inlines
+// before summarizing the rest, so a large Server (e.g. 25 models) doesn't
+// produce an unreadably long select title or confirm message.
+export const DIALOG_ID_LIMIT = 8;
+
+/**
+ * Maps a probed Server's `owned_by` value to the ServerKind `add` preselects.
+ * Normalized with `toLowerCase().trim()` first (R3-023) so a Server
+ * declaring `"Llama-Swap"` or `" MTPLX "` still resolves to its matching
+ * kind instead of falling through to "generic" on a case/whitespace
+ * mismatch — `OWNED_BY_KIND`'s keys are themselves already lowercase.
+ * `Object.hasOwn` guards the lookup (R1-008) so a Server declaring
+ * `owned_by: "constructor"` (or `"__proto__"`, `"toString"`, ...) can never
+ * resolve to an inherited `Object.prototype` property instead of a genuine
+ * table entry — those all correctly fall back to "generic", same as any
+ * other unrecognized value.
+ */
+export function kindFromOwnedBy(ownedBy: string | undefined): ServerKind {
+  if (ownedBy === undefined) {
+    return "generic";
+  }
+  const normalized = ownedBy.toLowerCase().trim();
+  if (!Object.hasOwn(OWNED_BY_KIND, normalized)) {
+    return "generic";
+  }
+  return OWNED_BY_KIND[normalized];
+}

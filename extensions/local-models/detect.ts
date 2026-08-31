@@ -14,6 +14,11 @@ export interface ProbeReachable {
   status: "reachable";
   baseUrl: string;
   models: string[];
+  // v0.1.1 hotfix item 3a: the first valid model entry's declared `owned_by`
+  // (llama-swap/mtplx/mlx-serve/omlx report their own kind here), used by
+  // `add`'s kind auto-detect via presets.kindFromOwnedBy. Undefined when no
+  // entry declares it.
+  ownedBy?: string;
 }
 
 /**
@@ -83,19 +88,25 @@ export async function probe(
       return { status: "unreachable", baseUrl, error: `HTTP ${response.status}` };
     }
 
-    const body = (await response.json()) as { data?: Array<{ id?: unknown }> };
+    const body = (await response.json()) as { data?: Array<{ id?: unknown; owned_by?: unknown }> };
     // R3-003: a semi-conformant /v1/models can return entries with no (or a
     // non-string) `id`; filter those out rather than reporting a garbage id
     // as a real model. An all-invalid list is treated as zero models below.
-    const models = Array.isArray(body?.data)
-      ? body.data.filter((model): model is { id: string } => typeof model?.id === "string").map((model) => model.id)
+    const validEntries = Array.isArray(body?.data)
+      ? body.data.filter((entry): entry is { id: string; owned_by?: unknown } => typeof entry?.id === "string")
       : [];
+    const models = validEntries.map((entry) => entry.id);
 
     if (models.length === 0) {
       return { status: "empty", baseUrl, models: [] };
     }
 
-    return { status: "reachable", baseUrl, models };
+    // v0.1.1 hotfix item 3a: the first entry that declares owned_by wins —
+    // every known Server kind reports the same value on every model it serves.
+    const ownedByEntry = validEntries.find((entry) => typeof entry.owned_by === "string");
+    const ownedBy = ownedByEntry?.owned_by as string | undefined;
+
+    return { status: "reachable", baseUrl, models, ownedBy };
   } catch (err) {
     return { status: "unreachable", baseUrl, error: errorMessage(err) };
   } finally {
