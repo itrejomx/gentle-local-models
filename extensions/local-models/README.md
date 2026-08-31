@@ -162,7 +162,7 @@ visible in `gentle-local-models.json`:
 | Label | Meaning |
 |---|---|
 | `verificado` | Read from the Server's own ground truth: `/v1/models`, `/props`, or the `config.yaml` that launched it. |
-| `declarado` | Typed by you at the interactive prompt (pre-filled with `32768`, editable). |
+| `declarado` | Chosen by you at the batched interactive prompt: one of the presets (`32k`/`64k`/`128k`/`192k`/`256k`) or `Custom…` (opens an editor pre-filled with `32768`, editable). |
 | `placeholder` | No source resolved and no prompt was possible (non-interactive run) — `contextWindow` was omitted entirely. |
 
 If a model's *declared* `contextWindow` is larger than what the Server can
